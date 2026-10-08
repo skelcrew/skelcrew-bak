@@ -170,7 +170,9 @@ export class Loop {
   private carryOut(command: Command, id: number | undefined, key: number): void {
     if (command.type === "type_into_session") {
       this.pending.delete(key);
-      if (id !== undefined) this.log.carriedOut(id);
+      // If it can't leave the outbox, it isn't typed: a restart would type
+      // it again. The message is lost instead, as the spec allows.
+      if (id !== undefined && !this.log.carriedOut(id).ok) return;
       this.tools.carryOut(command, () => true);
       return;
     }

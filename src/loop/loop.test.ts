@@ -268,3 +268,35 @@ describe("a tool replying from inside carryOut", () => {
     );
   });
 });
+
+describe("typing, when the outbox can't let it go", () => {
+  test("doesn't type, so a restart can't type it a second time", () => {
+    const store = EventStore.open(":memory:");
+    const loop = new Loop(config, { carryOut: () => {} }, store);
+    for (const input of [add(), start, workspaceCreated(1), sessionStarted(2, planner)]) {
+      loop.send(id, input, 1_000);
+    }
+    loop.send(id, ask(planner), 1_000);
+    loop.send(id, reply("Yes"), 1_000);
+
+    const typed: string[] = [];
+    const stuck: Log = {
+      append: (events, commands, done) => store.append(events, commands, done),
+      carriedOut: () => ({ ok: false, reason: "disk full" }),
+    };
+    const tools: Tools = {
+      carryOut: (command) => {
+        if (command.type === "type_into_session") typed.push(command.text);
+      },
+    };
+    const reopened = Loop.open(config, tools, {
+      ...stuck,
+      loadTasks: () => store.loadTasks(),
+      loadCommands: () => store.loadCommands(),
+    });
+    if (!reopened.ok) throw new Error(reopened.reason);
+    reopened.loop.send(id, { by: "daemon", type: "deliver_answer" }, 2_000);
+
+    expect(typed).toEqual([]);
+  });
+});
