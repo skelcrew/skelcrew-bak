@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "bin": {
+    "skel": "./src/cli/main.ts"
+  },
   "scripts": {
     "check": "bun run lint && bun run typecheck && bun run test",
     "lint": "biome ci --error-on-warnings .",

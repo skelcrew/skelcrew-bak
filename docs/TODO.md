@@ -66,7 +66,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
 - [x] **Who is calling.** Each session gets a secret token. A request carrying one is
       mapped to its task, role and phase, and anything outside them is refused. No token
       means you.
-- [ ] **Your commands.** `skel add`, `ls`, `set`, `reply`, `approve`, `deny`, `pause`,
+- [x] **Your commands.** `skel add`, `ls`, `set`, `reply`, `approve`, `deny`, `pause`,
       `resume`, `start`, `retry` and `kill`, each answered at once. `attach`, `path` and
       `open` need real sessions and workspaces, so they wait for milestone 4.
 - [ ] **Agent commands.** `skel triage proceed|ask|split|decline`, `ask`, `progress`, `done`,
