@@ -70,6 +70,9 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   // exists.
   mkdirSync(paths.folder, { recursive: true, mode: 0o700 });
   chmodSync(paths.folder, 0o700);
+  // Nothing in it belongs in git, least of all the secret that signs every
+  // session token. This holds in any repository, whatever its .gitignore.
+  writeFileSync(join(paths.folder, ".gitignore"), "*\n");
   const locked = takeLock(paths.repo);
   if (!locked.ok) return locked;
   const lock = locked.lock;

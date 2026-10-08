@@ -109,6 +109,17 @@ describe("the daemon", () => {
     expect(statSync(join(repo, ".skelcrew")).mode & 0o777).toBe(0o700);
   });
 
+  // It holds the secret every session token is signed with.
+  test("keeps .skelcrew out of git", async () => {
+    const repo = folder();
+    await started(repo);
+
+    Bun.spawnSync(["git", "init", "-q"], { cwd: repo });
+
+    const ignored = Bun.spawnSync(["git", "check-ignore", "-q", ".skelcrew/secret"], { cwd: repo });
+    expect(ignored.exitCode).toBe(0);
+  });
+
   test("keeps its tasks across a restart", async () => {
     const repo = folder();
     const first = await started(repo);
