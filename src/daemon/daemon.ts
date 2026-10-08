@@ -23,6 +23,9 @@ export type ServeOptions = {
   socketFolder?: string;
   tools?: Tools;
   now?: () => number;
+  // How often the daemon retries replies it couldn't save and starts what
+  // the scheduler picks. A second unless set.
+  tickMs?: number;
 };
 
 export type Served = { ok: true; daemon: Daemon } | { ok: false; message: string };
@@ -73,11 +76,18 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   const loop = opened.loop;
 
   const listening = await listen(paths.socket, (line) => answerLine(loop, line));
+  // Each tick runs between requests, never during one, since both run on
+  // this one thread and neither waits.
+  const ticking = setInterval(() => {
+    loop.retryReplies();
+    loop.startWaiting();
+  }, options.tickMs ?? 1_000);
   return {
     ok: true,
     daemon: {
       socket: paths.socket,
       stop: async () => {
+        clearInterval(ticking);
         await listening.stop();
         store.close();
         rmSync(paths.socket, { force: true });

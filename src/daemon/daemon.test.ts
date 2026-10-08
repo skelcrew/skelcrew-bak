@@ -117,6 +117,30 @@ describe("the daemon", () => {
   });
 });
 
+describe("the daemon's tick", () => {
+  test("starts what waits, without a request to prompt it", async () => {
+    const handed: string[] = [];
+    const served = await serve(folder(), {
+      socketFolder: join(folder(), "sockets"),
+      tools: { carryOut: (command) => handed.push(command.type) },
+      tickMs: 10,
+    });
+    if (!served.ok) throw new Error(served.message);
+    running.push(served.daemon);
+
+    await send(served.daemon.socket, add("Fix the export"));
+    await until(() => handed.length > 0);
+
+    expect(handed).toEqual(["create_workspace"]);
+  });
+});
+
+// Waits until `done` holds, checking every few milliseconds, for a second at
+// most.
+async function until(done: () => boolean): Promise<void> {
+  for (let waited = 0; !done() && waited < 1_000; waited += 5) await Bun.sleep(5);
+}
+
 // Sends one raw line and returns the first line that comes back.
 function rawLine(socket: string, line: string): Promise<string> {
   return new Promise((resolve, reject) => {
