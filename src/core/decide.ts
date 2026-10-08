@@ -200,14 +200,12 @@ function isReply(input: Input): input is Reply {
 }
 
 // Whether the task waits for this reply: its request is the one the task's
-// step, or its stop on the way, records.
+// step, or its stop on the way, records. A workspace, copy or session that
+// arrives never gets here: lateReply deals with it first.
 function awaits(task: Task, input: Reply): boolean {
   switch (input.type) {
-    case "workspace_created":
-    case "copy_created":
     case "workspace_failed":
       return waitingForWorkspace(task, input.request);
-    case "session_started":
     case "session_failed":
       return waitingForSession(task, input.request);
     case "session_ended":
