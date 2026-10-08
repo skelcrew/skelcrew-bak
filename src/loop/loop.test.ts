@@ -221,6 +221,20 @@ describe("reopening after a restart", () => {
 
     expect(opened).toEqual({ ok: false, reason: "Event 7: not JSON" });
   });
+
+  test("refuses to open a damaged outbox, saying which command", () => {
+    const damaged: ReadableLog = {
+      append: () => ({ ok: true, ids: [] }),
+      carriedOut: () => ({ ok: true }),
+      loadTasks: () => ({ ok: true, tasks: new Map() }),
+      loadCommands: () => ({ ok: false, seq: 3, reason: "no type" }),
+    };
+
+    expect(Loop.open(config, recording(), damaged)).toEqual({
+      ok: false,
+      reason: "Command 3: no type",
+    });
+  });
 });
 
 describe("typing into a session", () => {
