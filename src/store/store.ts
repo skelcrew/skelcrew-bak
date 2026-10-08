@@ -79,25 +79,33 @@ export class EventStore {
       const parsed = parseCommand(readJson(JSON.stringify(command)));
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
     }
-    const insert = this.db.query("INSERT INTO events (task_id, body) VALUES ($task, $body)");
-    const queue = this.db.query<{ id: number }, { body: string }>(
-      "INSERT INTO commands (body) VALUES ($body) RETURNING id",
-    );
-    const ids = this.db.transaction(() => {
-      for (const event of events) insert.run({ task: event.taskId, body: JSON.stringify(event) });
-      return commands.map((command) => {
-        const row = queue.get({ body: JSON.stringify(command) });
-        if (row === null) throw new Error("SQLite returned no id for a saved command.");
-        return row.id;
-      });
-    })();
-    return { ok: true, ids };
+    // SQLite can refuse a write, such as on a full disk. The transaction
+    // then saves nothing, and the failure comes back as a value.
+    return attempt(() => {
+      const insert = this.db.query("INSERT INTO events (task_id, body) VALUES ($task, $body)");
+      const queue = this.db.query<{ id: number }, { body: string }>(
+        "INSERT INTO commands (body) VALUES ($body) RETURNING id",
+      );
+      const ids = this.db.transaction(() => {
+        for (const event of events) {
+          insert.run({ task: event.taskId, body: JSON.stringify(event) });
+        }
+        return commands.map((command) => {
+          const row = queue.get({ body: JSON.stringify(command) });
+          if (row === null) throw new Error("SQLite returned no id for a saved command.");
+          return row.id;
+        });
+      })();
+      return { ok: true, ids };
+    });
   }
 
   // A command has been carried out, so a restart won't send it again.
   carriedOut(id: number): Saved {
-    this.db.query("DELETE FROM commands WHERE id = $id").run({ id });
-    return { ok: true };
+    return attempt(() => {
+      this.db.query("DELETE FROM commands WHERE id = $id").run({ id });
+      return { ok: true };
+    });
   }
 
   // The commands saved and not yet carried out, oldest first. A damaged one
@@ -148,6 +156,15 @@ export class EventStore {
       events.push(parsed.value);
     }
     return { ok: true, events };
+  }
+}
+
+// Runs a write, turning an error SQLite throws into a failure value.
+function attempt<T extends { ok: true }>(write: () => T): T | { ok: false; reason: string } {
+  try {
+    return write();
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 

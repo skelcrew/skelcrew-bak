@@ -174,3 +174,13 @@ describe("the outbox", () => {
     expect(!loaded.ok && loaded.seq).toBe(1);
   });
 });
+
+describe("a write SQLite refuses", () => {
+  test("comes back as a failure, not an exception", () => {
+    const store = EventStore.open(":memory:");
+    store.close();
+
+    expect(store.append(events(), []).ok).toBe(false);
+    expect(store.carriedOut(1).ok).toBe(false);
+  });
+});
