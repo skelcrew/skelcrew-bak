@@ -153,7 +153,8 @@ describe("merging main", () => {
     const { task } = play(merging(), [mainFailed(6, "index.lock exists")]);
 
     expect(task.hold).toEqual({ kind: "failed", step: "merge_main", message: "index.lock exists" });
-    expect(task.phase === "build" && task.step).toEqual({ kind: "merging_main", request: 6 });
+    expect(task.phase === "build" && task.step).toEqual({ kind: "merging_main", request: null });
+    expect(next(task, mainMerged(6)).ok).toBe(false);
   });
 });
 

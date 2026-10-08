@@ -110,7 +110,8 @@ export type TriageStep =
   | { kind: "running"; session: SessionId }
   // The planner proceeded with a spec, and Skelcrew is committing it to the
   // branch. The planner can't, since it has no edit permission.
-  | { kind: "committing_spec"; request: number; plan: Plan; text: string };
+  // A null request means it failed, and nothing is sent until your retry.
+  | { kind: "committing_spec"; request: number | null; plan: Plan; text: string };
 
 export type BuildStep =
   | { kind: "queued" }
@@ -119,7 +120,7 @@ export type BuildStep =
   | { kind: "starting"; request: number }
   | { kind: "running"; session: SessionId }
   // The builder has been stopped. A fresh one starts if review asks for changes.
-  | { kind: "merging_main"; request: number }
+  | { kind: "merging_main"; request: number | null } // null after a failure
   | Finishing; // only for `try`, which skips review
 
 export type ReviewStep =
@@ -130,7 +131,9 @@ export type ReviewStep =
   | Finishing;
 
 // The last steps of whichever phase ran last. No agent runs in either.
-export type Finishing = { kind: "awaiting_approval" } | { kind: "delivering"; request: number };
+export type Finishing =
+  | { kind: "awaiting_approval" }
+  | { kind: "delivering"; request: number | null }; // null after a failure
 
 // ---------------------------------------------------------------------------
 // Phases

@@ -24,6 +24,7 @@ import type {
   SessionContext,
   SessionId,
   Task,
+  TesterCopy,
   Timestamp,
   Workspace,
 } from "./types";
@@ -189,6 +190,13 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (task.hold !== null) return ctx.reject(`#${task.id} is held.`);
       if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
+      // Two agents never work on a task at once, so the last one's stop is
+      // confirmed first. The CLI waits and sends the start again.
+      if (task.stopping !== null) {
+        return ctx.reject(
+          `#${task.id} is still stopping its last agent. Start waits until it has.`,
+        );
+      }
       const go = carryOn(task);
       const yours: EventBody[] = input.type === "start_now" ? [{ type: "task.started_now" }] : [];
       return ctx.accept([...yours, ...go.events], go.commands);
@@ -208,6 +216,7 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
     }
 
     case "resume":
+      if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (task.hold === null) return ctx.reject(`#${task.id} isn't held.`);
       if (task.hold.kind !== "paused") {
         return ctx.reject(`#${task.id} isn't paused. Retry it instead.`);
@@ -217,6 +226,7 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
     // Lifts a hold from anything that went wrong. A failed merge, spec or
     // delivery is sent again. Anything else waits for a slot.
     case "retry": {
+      if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (task.hold === null) return ctx.reject(`#${task.id} isn't held.`);
       if (task.hold.kind === "paused")
         return ctx.reject(`#${task.id} is paused. Resume it instead.`);
@@ -242,6 +252,10 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
       if (workspace !== null && !goesWithStop && task.stopping === null) {
         events.push({ type: "workspace.removed", path: workspace.path });
         commands.push({ type: "remove_workspace", path: workspace.path, deleteBranch: false });
+      }
+      // The tester's copy goes too. A working tester's stop removes it.
+      if (task.phase === "review" && task.copy !== null && stop.events.length === 0) {
+        commands.push({ type: "remove_workspace", path: task.copy.path, deleteBranch: false });
       }
       return ctx.accept(events, commands);
     }
@@ -378,7 +392,9 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
         session: stopping.session,
         saved: input.saved,
       };
-      if (input.saved === "save_failed" && task.phase !== "ended") {
+      // A task already held keeps its hold. session.stopped records the
+      // failed save, and the work stays in the workspace either way.
+      if (input.saved === "save_failed" && task.phase !== "ended" && task.hold === null) {
         return ctx.accept([
           confirmed,
           held({ kind: "failed", step: "save", message: input.message }),
@@ -456,6 +472,8 @@ function carryOn(task: Exclude<Task, { phase: "ended" }>): Effects {
     case "triage":
       return startPlanner(task, task.workspace, next(task));
     case "review":
+      // A copy left from a tester that crashed or failed to start is reused.
+      if (task.copy !== null) return startTester(task, task.copy, next(task));
       return startCopy(task, task.reviewed, next(task));
     case "build":
       return carryOnBuilding(task, task.workspace);
@@ -726,23 +744,10 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
       if (!waitingForWorkspace(task, input.request)) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
-      const request = next(task);
+      const tester = startTester(task, input.copy, next(task));
       return ctx.accept(
-        [
-          { type: "copy.created", copy: input.copy },
-          { type: "session.requested", request, role: "tester" },
-        ],
-        [
-          {
-            type: "start_session",
-            taskId: task.id,
-            request,
-            role: "tester",
-            cwd: input.copy.path,
-            edits: false,
-            context: { ...sessionContext(task, task.plan, null), handover: task.handover },
-          },
-        ],
+        [{ type: "copy.created", copy: input.copy }, ...tester.events],
+        tester.commands,
       );
     }
 
@@ -873,9 +878,15 @@ function restartBuild(
 ): Decision {
   const stop = stopRunning(task, next(task), null);
   const waitForStop = stop.events.length > 0 || task.stopping !== null;
+  // Leaving review drops the tester's copy. A working tester's stop removes
+  // it. Otherwise it goes now.
+  const commands = [...stop.commands];
+  if (task.phase === "review" && task.copy !== null && stop.events.length === 0) {
+    commands.push({ type: "remove_workspace", path: task.copy.path, deleteBranch: false });
+  }
   return ctx.accept(
     [...before, ...stop.events, { type: "build.restarted", plan, waitForStop }],
-    stop.commands,
+    commands,
   );
 }
 
@@ -1033,6 +1044,25 @@ function startCopy(task: Task, reviewed: Reviewed, request: number): Effects {
   };
 }
 
+// Starts the tester in its own copy of the reviewed commit, read only, told
+// what the builder handed over.
+function startTester(task: TaskIn<"review">, copy: TesterCopy, request: number): Effects {
+  return {
+    events: [{ type: "session.requested", request, role: "tester" }],
+    commands: [
+      {
+        type: "start_session",
+        taskId: task.id,
+        request,
+        role: "tester",
+        cwd: copy.path,
+        edits: false,
+        context: { ...sessionContext(task, task.plan, null), handover: task.handover },
+      },
+    ],
+  };
+}
+
 // Starts a builder in the task's workspace, told why it is there. It may
 // edit, except on an `answer` task, which never changes code.
 function startBuilder(
@@ -1145,10 +1175,12 @@ function busy(task: Exclude<Task, { phase: "ended" }>): boolean {
     case "creating_workspace":
     case "creating_copy":
     case "starting":
+      return true;
+    // Null once a failure answered it, so nothing is under way.
     case "committing_spec":
     case "merging_main":
     case "delivering":
-      return true;
+      return task.step.request !== null;
     default:
       return false;
   }

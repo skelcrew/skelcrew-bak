@@ -58,8 +58,11 @@ function holdsSlot(task: Task): boolean {
   }
 }
 
+// Queued, not held, and with no agent still stopping, since the next agent
+// on a task starts only once the last one's stop is confirmed.
 function waitingForSlot(task: Task): boolean {
-  return task.phase !== "ended" && task.hold === null && task.step.kind === "queued";
+  if (task.phase === "ended" || task.hold !== null || task.stopping !== null) return false;
+  return task.step.kind === "queued";
 }
 
 function laneOrder(task: Task): number {

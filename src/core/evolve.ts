@@ -121,14 +121,19 @@ export const evolve: Evolve = (task, event) => {
       if (task.question === null) return refuse(event, `#${task.id} has no open question`);
       return ok({ ...task, question: null, keptAnswer: null });
 
-    // The task keeps its slot until the stop is confirmed.
-    case "session.stopping":
+    // The task keeps its slot until the stop is confirmed. A question from
+    // the agent being stopped goes with it, since no answer could reach it.
+    case "session.stopping": {
+      const asked = task.question?.session === event.session;
       return ok({
         ...task,
+        question: asked ? null : task.question,
+        keptAnswer: asked ? null : task.keptAnswer,
         stopping: { session: event.session, request: event.request, removes: event.removes },
         attached: false,
         requests: Math.max(task.requests, event.request),
       });
+    }
 
     // An ended task's workspace goes with the stop that removes it, unless
     // the save failed. Then it stays, so no work is thrown away.
@@ -312,6 +317,7 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
     case "main.conflict":
       return ok({
         ...task,
+        step: { kind: "queued" },
         loops: task.loops + 1,
         feedback: { kind: "conflict", files: event.files },
         handover: null,
@@ -487,7 +493,7 @@ function restarted(
   };
 }
 
-// The task ends. Its question and attachment go with it. The workspace is
+// The task ends. Its question, hold and attachment go with it. The workspace is
 // tracked until its removal is confirmed.
 function toEnded(
   task: Exclude<Task, { phase: "ended" }>,
@@ -498,6 +504,7 @@ function toEnded(
     ...base(task),
     question: null,
     keptAnswer: null,
+    hold: null,
     attached: false,
     phase: "ended",
     outcome,
@@ -508,18 +515,29 @@ function toEnded(
 
 // Where a held task waits. Its agent is stopped, so a step with an agent
 // goes back to the queue, for a fresh one after your resume or retry. A step
-// without one stays: a failed merge or delivery is sent again by your retry,
-// and an approval still waits for you. Null for an ended task.
+// without one stays, so an approval still waits for you, and your retry sends
+// a failed merge, spec or delivery again. A hold answers that step's request,
+// so a reply after it changes nothing. Null for an ended task.
 function rest(task: Task): Task | null {
   switch (task.phase) {
     case "ended":
       return null;
     case "triage":
-      return withAgent(task.step.kind) ? { ...task, step: { kind: "queued" } } : task;
+      if (withAgent(task.step.kind)) return { ...task, step: { kind: "queued" } };
+      if (task.step.kind === "committing_spec")
+        return { ...task, step: { ...task.step, request: null } };
+      return task;
     case "build":
-      return withAgent(task.step.kind) ? { ...task, step: { kind: "queued" } } : task;
+      if (withAgent(task.step.kind)) return { ...task, step: { kind: "queued" } };
+      if (task.step.kind === "merging_main" || task.step.kind === "delivering") {
+        return { ...task, step: { kind: task.step.kind, request: null } };
+      }
+      return task;
     case "review":
-      return withAgent(task.step.kind) ? { ...task, step: { kind: "queued" } } : task;
+      if (withAgent(task.step.kind)) return { ...task, step: { kind: "queued" } };
+      if (task.step.kind === "delivering")
+        return { ...task, step: { kind: "delivering", request: null } };
+      return task;
   }
 }
 

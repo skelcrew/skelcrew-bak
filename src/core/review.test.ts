@@ -180,7 +180,8 @@ describe("delivery", () => {
     const { task } = play(delivering(), [deliveryFailed(10, "push rejected")]);
 
     expect(task.hold).toEqual({ kind: "failed", step: "delivery", message: "push rejected" });
-    expect(task.phase === "review" && task.step).toEqual({ kind: "delivering", request: 10 });
+    expect(task.phase === "review" && task.step).toEqual({ kind: "delivering", request: null });
+    expect(next(task, delivered(10)).ok).toBe(false);
   });
 
   test("of an answer keeps the tasks it proposes, waiting for you", () => {
