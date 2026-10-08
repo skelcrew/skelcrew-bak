@@ -1,6 +1,7 @@
-// Zod schemas for stored events. The log is read back from SQLite, where
-// anything could have happened to it, so each event is checked before it is
-// used, and again before it is written.
+// Zod schemas for stored events, and for commands saved in the outbox until
+// they are carried out. Both are read back from SQLite, where anything could
+// have happened to them, so each is checked before it is used, and again
+// before it is written.
 //
 // Every schema is annotated with the core's own type, so the typechecker
 // fails if the two drift apart, and a check at the bottom fails if an event
@@ -12,11 +13,14 @@ import * as z from "zod";
 import { CommitSha, SessionId, TaskId } from "../core/ids";
 import type {
   BranchFacts,
+  Command,
   Delivered,
+  Feedback,
   Handover,
   Hold,
   Plan,
   Question,
+  SessionContext,
   SessionUsage,
   Source,
   TaskEvent,
@@ -205,6 +209,89 @@ export type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 // Checks a value read back from the store, or about to be written to it.
 export function parseTaskEvent(value: unknown): Parsed<TaskEvent> {
   const parsed = taskEvent.safeParse(value);
+  if (parsed.success) return { ok: true, value: parsed.data };
+  return { ok: false, reason: z.prettifyError(parsed.error) };
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+const feedback: z.ZodType<Feedback> = z.union([
+  z.strictObject({ kind: z.literal("findings"), text: z.string() }),
+  z.strictObject({ kind: z.literal("conflict"), files: z.array(z.string()) }),
+  z.strictObject({ kind: z.literal("denied"), note: z.string() }),
+  z.strictObject({ kind: z.literal("held"), hold }),
+]);
+
+const sessionContext: z.ZodType<SessionContext> = z.strictObject({
+  title: z.string(),
+  description: z.string().nullable(),
+  plan: plan.nullable(),
+  feedback: feedback.nullable(),
+  handover: handover.nullable(),
+  answer: z.string().nullable(),
+});
+
+const removal = z.strictObject({ path: z.string(), deleteBranch: z.boolean() });
+
+const commands = [
+  z.strictObject({ type: z.literal("create_workspace"), taskId: TaskId, request }),
+  z.strictObject({ type: z.literal("create_copy"), taskId: TaskId, request, commit: CommitSha }),
+  z.strictObject({
+    type: z.literal("remove_workspace"),
+    path: z.string(),
+    deleteBranch: z.boolean(),
+  }),
+  z.strictObject({
+    type: z.literal("start_session"),
+    taskId: TaskId,
+    request,
+    role: z.enum(["planner", "builder", "tester"]),
+    cwd: z.string(),
+    edits: z.boolean(),
+    context: sessionContext,
+  }),
+  z.strictObject({
+    type: z.literal("stop_session"),
+    taskId: TaskId,
+    request: request.nullable(),
+    session: SessionId,
+    save: z.boolean(),
+    remove: removal.nullable(),
+  }),
+  z.strictObject({ type: z.literal("type_into_session"), session: SessionId, text: z.string() }),
+  z.strictObject({
+    type: z.literal("commit_spec"),
+    taskId: TaskId,
+    request,
+    workspace,
+    text: z.string(),
+  }),
+  z.strictObject({ type: z.literal("merge_main"), taskId: TaskId, request, workspace }),
+  z.strictObject({
+    type: z.literal("deliver"),
+    taskId: TaskId,
+    request,
+    intent,
+    reviewed: branchFacts,
+    handover,
+    evidence: z.string().nullable(),
+  }),
+] as const;
+
+export const command: z.ZodType<Command> = z.union(commands);
+
+// Fails to compile if a command type has no schema above.
+type CoveredCommand = z.infer<(typeof commands)[number]>["type"];
+const everyCommandHasASchema: Exclude<Command["type"], CoveredCommand> extends never
+  ? true
+  : false = true;
+void everyCommandHasASchema;
+
+// Checks a command read back from the outbox, or about to be saved in it.
+export function parseCommand(value: unknown): Parsed<Command> {
+  const parsed = command.safeParse(value);
   if (parsed.success) return { ok: true, value: parsed.data };
   return { ok: false, reason: z.prettifyError(parsed.error) };
 }
