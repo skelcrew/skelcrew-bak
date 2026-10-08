@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { add, id, peek, run, start, types } from "./testing";
+import { decide } from "./decide";
+import { evolve } from "./evolve";
+import { TaskId } from "./ids";
+import {
+  add,
+  config,
+  id,
+  pause,
+  peek,
+  reviewed,
+  run,
+  start,
+  triageRunning,
+  types,
+} from "./testing";
+import type { TaskEvent } from "./types";
 
 describe("adding a task", () => {
   test("waits in triage's queue", () => {
@@ -78,5 +93,33 @@ describe("starting triage", () => {
       ok: false,
       rejection: { input: "start", reason: "#142 doesn't exist." },
     });
+  });
+});
+
+describe("AGENTS.md, code rules: every event belongs to its task", () => {
+  test("an input for another task number is refused", () => {
+    const { task } = triageRunning();
+    const decision = decide(task, { taskId: TaskId.parse(7), at: 0, input: pause }, config);
+
+    expect(decision).toEqual({
+      ok: false,
+      rejection: { input: "pause", reason: "This input is for #7, but the task is #142." },
+    });
+  });
+});
+
+describe("a damaged log", () => {
+  test("stops replay: evolve refuses an event that doesn't fit", () => {
+    const { task } = run(add());
+    const misplaced: TaskEvent = {
+      v: 1,
+      taskId: id,
+      at: 0,
+      type: "review.passed",
+      commit: reviewed.head,
+      evidence: "",
+    };
+
+    expect(evolve(task, misplaced).ok).toBe(false);
   });
 });

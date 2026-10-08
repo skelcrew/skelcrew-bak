@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   add,
+  addPlanned,
   builder,
   buildRunning,
   done,
@@ -13,11 +14,14 @@ import {
   play,
   resume,
   retry,
+  reviewRunning,
   run,
   sessionFailed,
+  sessionStarted,
   start,
   startNow,
   stopped,
+  tester,
   triageRunning,
   types,
   usage,
@@ -287,5 +291,80 @@ describe("a change in the tracker", () => {
         reason: "Tasks move only through Skelcrew. The issue closed in the tracker was ignored.",
       },
     });
+  });
+});
+
+describe("rule 15: work is saved before it is let go", () => {
+  test("a workspace whose save failed survives a later kill", () => {
+    const { task, commands } = play(buildRunning().task, [
+      pause,
+      stopped(5, builder, "save_failed"),
+      kill,
+    ]);
+
+    expect(commands).toEqual([]);
+    expect(task.phase === "ended" && task.kept).toEqual(workspace);
+  });
+
+  test("a repeated start reply for an agent being stopped is ignored", () => {
+    const stopping = play(buildRunning().task, [done()]).task;
+
+    expect(peek(stopping, sessionStarted(4, builder))).toEqual({
+      ok: true,
+      events: [],
+      commands: [],
+    });
+  });
+});
+
+describe("waiting while an agent stops", () => {
+  test("pause waits until the stop is confirmed", () => {
+    const stopping = play(buildRunning().task, [done()]).task;
+
+    expect(peek(stopping, pause)).toEqual({
+      ok: false,
+      rejection: {
+        input: "pause",
+        reason: "#142 is busy with a step. skel pause waits until it settles.",
+      },
+    });
+  });
+});
+
+describe("a paused tester", () => {
+  test("keeps its copy, and a resumed review starts the tester in it", () => {
+    const paused = play(reviewRunning().task, [pause]);
+    const stop = paused.commands[0];
+    expect(stop?.type === "stop_session" && stop.remove).toBeNull();
+
+    const { task, commands } = play(paused.task, [stopped(9, tester), resume, start]);
+    expect(task.phase === "review" && task.copy?.path).toBe("/repo/.skelcrew/review/142");
+    expect(commands[0]?.type).toBe("start_session");
+  });
+});
+
+describe("a resumed task", () => {
+  test("goes to the front of the line once, not every time it waits after", () => {
+    const { task } = play(buildRunning().task, [
+      pause,
+      stopped(5, builder, "saved"),
+      resume,
+      start,
+    ]);
+
+    expect(task.lane).toBe("queued");
+  });
+});
+
+describe("killing while a session starts", () => {
+  test("keeps the workspace, and saves the late session's work when it is stopped", () => {
+    const { task, commands } = run(addPlanned(), start, workspaceCreated(1), kill);
+
+    expect(commands).toEqual([]);
+    expect(task.phase === "ended" && task.kept).toEqual(workspace);
+    const late = peek(task, sessionStarted(2, builder));
+    expect(late.ok && late.commands[0]?.type === "stop_session" && late.commands[0].save).toBe(
+      true,
+    );
   });
 });

@@ -8,14 +8,18 @@ import {
   done,
   id,
   kill,
+  mainFailed,
   mainMerged,
+  pass,
   peek,
   planner,
   play,
+  reviewRunning,
   run,
   sessionStarted,
   start,
   stopped,
+  tester,
   workspace,
   workspaceCreated,
 } from "./testing";
@@ -77,5 +81,33 @@ describe("a repeated reply", () => {
     const { task } = buildRunning();
 
     expect(peek(task, workspaceCreated(1))).toEqual({ ok: true, events: [], commands: [] });
+  });
+});
+
+describe("rule 5: a late reply changes nothing", () => {
+  test("is accepted with nothing to do, not refused", () => {
+    const failed = play(buildRunning().task, [done(), stopped(5, builder, "saved"), mainFailed(6)]);
+
+    expect(peek(failed.task, mainMerged(6))).toEqual({ ok: true, events: [], commands: [] });
+  });
+});
+
+describe("a stop's reply", () => {
+  test("saying a save failed, for a stop that didn't save, changes nothing about saving", () => {
+    const delivering = play(reviewRunning().task, [pass()]).task;
+    const { task } = play(delivering, [stopped(9, tester, "save_failed")]);
+
+    expect(task.hold).toBeNull();
+    expect(task.phase === "review" && task.step).toEqual({ kind: "delivering", request: 10 });
+  });
+
+  test("for another session than the one stopping changes nothing", () => {
+    const stopping = play(buildRunning().task, [done()]).task;
+
+    expect(peek(stopping, stopped(5, tester, "saved"))).toEqual({
+      ok: true,
+      events: [],
+      commands: [],
+    });
   });
 });

@@ -13,18 +13,23 @@ import {
   deliveryFailed,
   deny,
   done,
+  doneAnswer,
   id,
   mainMerged,
   pass,
+  pause,
   peek,
   play,
   reviewed,
   reviewRunning,
   sessionStarted,
+  set,
+  sha,
   stopped,
   tester,
   types,
 } from "./testing";
+import type { Input } from "./types";
 
 describe("the tester's copy arriving", () => {
   test("starts the tester in it, read only, told what was handed over", () => {
@@ -218,5 +223,102 @@ describe("a try", () => {
 
     expect(types(events)).toEqual(["main.merged", "output.requested"]);
     expect(task.phase === "build" && task.step).toEqual({ kind: "delivering", request: 7 });
+  });
+});
+
+describe("rule 6: one reviewed commit", () => {
+  test("a tester's copy of another commit isn't reviewed, and is removed", () => {
+    const merged = play(buildRunning().task, [done(), stopped(5, builder, "saved"), mainMerged(6)]);
+    const wrong: Input = {
+      by: "plugin",
+      type: "copy_created",
+      request: 7,
+      copy: { path: copy.path, commit: sha("e") },
+    };
+    const { task, commands } = play(merged.task, [wrong]);
+
+    expect(task.hold?.kind).toBe("failed");
+    expect(commands).toEqual([{ type: "remove_workspace", path: copy.path, deleteBranch: false }]);
+  });
+
+  test("a delivery of another commit holds the task instead of ending it", () => {
+    const delivering = play(reviewRunning().task, [pass()]).task;
+    const { task } = play(delivering, [delivered(10, sha("e"))]);
+
+    expect(task.phase).toBe("review");
+    expect(task.hold).toEqual({
+      kind: "failed",
+      step: "delivery",
+      message: `Delivered ${sha("e")}, but the reviewed commit is ${reviewed.head}.`,
+    });
+  });
+
+  test("an answer's delivery must be its report, not a branch", () => {
+    const answering = play(
+      buildRunning({ intent: "answer", rigor: "light", approve: false }).task,
+      [
+        doneAnswer(),
+        stopped(5, builder),
+        copyCreated(6, branch.head),
+        sessionStarted(7, tester),
+        pass(),
+      ],
+    ).task;
+    const { task } = play(answering, [delivered(9, branch.head)]);
+
+    expect(task.hold?.kind).toBe("failed");
+  });
+});
+
+describe("approval on a held task", () => {
+  test("waits until you resume it", () => {
+    const awaiting = play(reviewRunning({ intent: "ship", rigor: "full", approve: true }).task, [
+      pass(),
+      stopped(9, tester),
+      pause,
+    ]).task;
+
+    expect(peek(awaiting, approve)).toEqual({
+      ok: false,
+      rejection: { input: "approve", reason: "#142 is held. Resume it first." },
+    });
+    expect(peek(awaiting, set({ approve: false })).ok).toBe(false);
+  });
+});
+
+describe("an ended task", () => {
+  test("keeps what was handed over", () => {
+    const { task } = play(reviewRunning().task, [pass(), stopped(9, tester), delivered(10)]);
+
+    expect(task.phase === "ended" && task.handover?.text).toBe(
+      "Empty reports now export a header row.",
+    );
+  });
+});
+
+describe("your sign-off on a held task", () => {
+  const heldAwaiting = () =>
+    play(reviewRunning({ intent: "ship", rigor: "full", approve: true }).task, [
+      pass(),
+      stopped(9, tester),
+      pause,
+    ]).task;
+
+  test("deny waits until you resume it, like approve", () => {
+    expect(peek(heldAwaiting(), deny())).toEqual({
+      ok: false,
+      rejection: { input: "deny", reason: "#142 is held. Resume it first." },
+    });
+  });
+
+  test("changing rigor doesn't, when nothing lifts the approval", () => {
+    const critical = { head: reviewed.head, changedFiles: ["src/auth/token.ts"] };
+    const awaiting = play(reviewRunning(undefined, critical).task, [
+      pass(),
+      stopped(9, tester),
+      pause,
+    ]).task;
+
+    expect(peek(awaiting, set({ rigor: "light" })).ok).toBe(true);
   });
 });

@@ -206,3 +206,12 @@ describe("a task from the tracker", () => {
     });
   });
 });
+
+describe("set", () => {
+  test("with nothing to change is refused", () => {
+    expect(peek(run(add()).task, set({}))).toEqual({
+      ok: false,
+      rejection: { input: "set", reason: "Set intent, rigor or approval." },
+    });
+  });
+});

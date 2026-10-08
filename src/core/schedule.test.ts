@@ -8,15 +8,20 @@ import {
   builder,
   buildRunning,
   config,
+  done,
   kill,
+  mainFailed,
   pause,
   planner,
   play,
   reply,
   resume,
+  retry,
   run,
+  start,
   stopped,
   triageRunning,
+  types,
 } from "./testing";
 import type { Task } from "./types";
 
@@ -85,5 +90,23 @@ describe("slots in use", () => {
 
   test("starts and stops the task no longer records count too", () => {
     expect(slotsInUse([], 2)).toBe(2);
+  });
+});
+
+describe("rule 10: max_running", () => {
+  test("a retried merge waits for a slot instead of starting at once", () => {
+    const failed = play(buildRunning().task, [done(), stopped(5, builder, "saved"), mainFailed(6)]);
+    const { task, commands } = play(failed.task, [retry]);
+
+    expect(commands).toEqual([]);
+    expect(slotsInUse([task], 0)).toBe(0);
+    const { events } = play(task, [start]);
+    expect(types(events)).toEqual(["main.requested"]);
+  });
+
+  test("an attached task keeps its slot even while its agent asks you something", () => {
+    const { task } = play(buildRunning().task, [attach, ask(builder)]);
+
+    expect(slotsInUse([task], 0)).toBe(1);
   });
 });
