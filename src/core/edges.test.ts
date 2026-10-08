@@ -157,7 +157,7 @@ describe("approval on a held task", () => {
   });
 });
 
-describe("rule 23: every event belongs to its task", () => {
+describe("AGENTS.md, code rules: every event belongs to its task", () => {
   test("an input for another task number is refused", () => {
     const { task } = triageRunning();
     const decision = decide(task, { taskId: TaskId.parse(7), at: 0, input: pause }, config);

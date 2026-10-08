@@ -393,7 +393,7 @@ function apply(world: World, input: Input, at: number): void {
   const before = world.task;
   const decision = decide(before, envelope(input), world.config);
 
-  // 25 (in AGENTS.md): the same input always gives the same result.
+  // AGENTS.md, code rules: the same input always gives the same result.
   expect(decide(before, envelope(input), world.config)).toEqual(decision);
 
   // 4: tasks move only through Skelcrew.
@@ -667,7 +667,7 @@ function checkTask(world: World, task: Task): void {
   // 14, the other way: everything the task holds really exists.
   for (const path of heldPaths(task)) expect(world.liveWorkspaces.has(path)).toBe(true);
 
-  // 23: replaying the log rebuilds the task exactly.
+  // 22: replaying the log rebuilds the task exactly.
   let replayed: Task | null = null;
   for (const event of world.log) {
     const evolved = evolve(replayed, event);
