@@ -5,6 +5,7 @@
 // An event that doesn't fit is refused with the reason, so a damaged log
 // stops replay instead of rebuilding a wrong task.
 
+import type { TaskIn } from "./task";
 import type { Evolve, Evolved, Task, TaskBase, TaskEvent } from "./types";
 
 export const evolve: Evolve = (task, event) => {
@@ -46,8 +47,37 @@ export const evolve: Evolve = (task, event) => {
       reviewed: null,
     });
   }
-  return refuse(event, "it isn't handled yet");
+  if (task === null) return refuse(event, `#${event.taskId} doesn't exist`);
+
+  switch (task.phase) {
+    case "triage":
+      return inTriage(task, event);
+    default:
+      return refuse(event, "it isn't handled yet");
+  }
 };
+
+function inTriage(task: TaskIn<"triage">, event: TaskEvent): Evolved {
+  switch (event.type) {
+    case "workspace.requested":
+      return ok(
+        withRequest(task, event.request, { kind: "creating_workspace", request: event.request }),
+      );
+    default:
+      return refuse(event, `#${task.id} is in triage`);
+  }
+}
+
+// A step that sends a request records the number the event gives it, so only
+// the reply that brings it back can answer. The counter follows it. Typing the
+// step as T["step"] makes the compiler check it fits the task's phase.
+function withRequest<T extends Extract<Task, { step: unknown }>>(
+  task: T,
+  request: number,
+  step: T["step"],
+): T {
+  return { ...task, step, requests: request };
+}
 
 function ok(task: Task): Evolved {
   return { ok: true, task };
