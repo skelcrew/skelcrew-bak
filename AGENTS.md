@@ -106,6 +106,8 @@ read, rewrite it.
 ## Layout
 
 - `docs/spec.md`: the design. The source of truth for what Skelcrew does.
+- `docs/ROADMAP.md`: the milestones, in order.
+- `docs/TODO.md`: the tasks for the current milestone. A new milestone is split into tasks here when it starts, and a task is ticked in the commit that finishes it.
 - `docs/core.md`: the core worked out in words: phases, steps, inputs by sender, commands.
 - `docs/invariants.md`: the rules the core must never break. Tests are written against it.
 - `docs/learnings.md`: what v3 taught us, and code worth reusing from it.

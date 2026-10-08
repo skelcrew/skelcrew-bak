@@ -547,7 +547,7 @@ limits:
 
 ## Build plan
 
-Start over rather than rewriting v3, but carry its lessons.
+Start over rather than rewriting v3, but carry its lessons. `docs/ROADMAP.md` tracks the milestones, and `docs/TODO.md` the tasks for the current one.
 
 1. **Core, attended.** Types, events and invariants approved first, then the reducer with a test per transition, property tests, and a simulator that runs whole lifecycles with scripted replies.
 2. **Smallest real loop.** `skel add` → planner → builder in a worktree with tmux → tester in its own worktree → a branch.
