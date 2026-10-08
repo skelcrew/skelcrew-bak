@@ -72,7 +72,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
 - [x] **Agent commands.** `skel triage proceed|ask|split|decline`, `ask`, `progress`, `done`,
       `give-up`, `pass` and `changes`. A file argument, such as a brief, is read by `skel`
       and sent as text.
-- [ ] **Start on demand.** Any `skel` command starts the daemon if none runs, and waits until
+- [x] **Start on demand.** Any `skel` command starts the daemon if none runs, and waits until
       it listens.
 - [ ] **Walkthrough test.** One task driven from `skel add` to delivered through the real
       socket, with a test standing in for each agent by its token. This is the milestone's

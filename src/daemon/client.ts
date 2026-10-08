@@ -1,10 +1,13 @@
 // How `skel` talks to the daemon: one request on a fresh connection, and the
 // answer that carries the same id.
 
-import { connect } from "node:net";
+import { Socket } from "node:net";
 import { type Call, encode, parseAnswer, type Result, VERSION } from "../protocol/protocol";
 
-export type Sent = { ok: true; result: Result } | { ok: false; message: string };
+// `unreachable` says no daemon answers on the socket, so one can be started.
+export type Sent =
+  | { ok: true; result: Result }
+  | { ok: false; message: string; unreachable?: true };
 
 // `token` is the caller's session token. None means you.
 export function send(socket: string, call: Call, token: string | null = null): Promise<Sent> {
@@ -18,9 +21,9 @@ export function send(socket: string, call: Call, token: string | null = null): P
       connection.destroy();
       resolve(sent);
     };
-    const connection = connect(socket, () =>
-      connection.write(encode({ v: VERSION, id, token, call })),
-    );
+    // The handlers go on before connecting: Bun can report a missing socket
+    // during the connect call itself.
+    const connection = new Socket();
     connection.on("data", (chunk) => {
       text += chunk.toString();
       const end = text.indexOf("\n");
@@ -34,11 +37,42 @@ export function send(socket: string, call: Call, token: string | null = null): P
         answer.ok ? { ok: true, result: answer.result } : { ok: false, message: answer.message },
       );
     });
-    connection.on("error", (error) =>
-      finish({ ok: false, message: `No daemon answers: ${error.message}` }),
-    );
+    connection.on("error", (error) => {
+      const code = "code" in error ? error.code : null;
+      const missing = code === "ENOENT" || code === "ECONNREFUSED";
+      const message = `No daemon answers: ${error.message}`;
+      finish(missing ? { ok: false, message, unreachable: true } : { ok: false, message });
+    });
     connection.on("close", () =>
       finish({ ok: false, message: "The daemon closed the connection without answering." }),
     );
+    connection.connect(socket, () => connection.write(encode({ v: VERSION, id, token, call })));
   });
+}
+
+// Sends, starting the daemon first if none answers. `start` runs it in the
+// background. Two commands can each start one: the second daemon refuses on
+// the repository's lock, and both commands reach the first.
+export async function sendStarting(
+  socket: string,
+  call: Call,
+  token: string | null,
+  start: () => Promise<void>,
+  timeoutMs = 10_000,
+): Promise<Sent> {
+  const first = await send(socket, call, token);
+  if (first.ok || first.unreachable !== true) return first;
+
+  await start();
+  const giveUpAt = Date.now() + timeoutMs;
+  for (;;) {
+    const sent = await send(socket, call, token);
+    if (sent.ok || sent.unreachable !== true) return sent;
+    if (Date.now() >= giveUpAt) {
+      const seconds = timeoutMs / 1000;
+      const message = `The daemon didn't answer within ${seconds} seconds of starting it. See .skelcrew/daemon.log.`;
+      return { ok: false, message };
+    }
+    await Bun.sleep(50);
+  }
 }
