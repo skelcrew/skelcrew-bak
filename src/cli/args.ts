@@ -1,15 +1,13 @@
 // Reads `skel`'s arguments into a request for the daemon. Nothing here talks
 // to the daemon, so every command's reading is tested on its own.
 
-import { parseArgs } from "node:util";
 import { TaskId } from "../core/ids";
 import type { Intent, Rigor } from "../core/types";
-import type { Call, WireInput } from "../protocol/protocol";
+import type { WireInput } from "../protocol/protocol";
 import { intent, rigor } from "../store/schema";
+import { type Flags, type Read, text, within } from "./parse";
 
-export type Read = { ok: true; call: Call } | { ok: false; message: string };
-
-type Flags = Record<string, { type: "boolean" | "string" }>;
+export type { Read } from "./parse";
 
 export function readArgs(args: string[]): Read {
   const [name = "help", ...rest] = args;
@@ -88,7 +86,7 @@ function add(args: string[]): Read {
       chosenIntent === undefined || chosenRigor === undefined
         ? null
         : { intent: chosenIntent, rigor: chosenRigor, approve: values.approve === true };
-    const description = typeof values.description === "string" ? values.description : null;
+    const description = text(values, "description");
     return {
       ok: true,
       call: { type: "send", task: null, input: { type: "add", title, description, plan } },
@@ -150,34 +148,6 @@ function withText(
     }
     return { ok: true, call: { type: "send", task: task.task, input: input(text) } };
   });
-}
-
-// Reads the flags and up to `most` plain arguments, refusing anything else.
-function within(
-  name: string,
-  args: string[],
-  flags: Flags,
-  most: number,
-  then: (values: Record<string, string | boolean | undefined>, positionals: string[]) => Read,
-): Read {
-  let parsed: ReturnType<typeof parseArgs>;
-  try {
-    parsed = parseArgs({ args, options: flags, allowPositionals: true, strict: true });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `\`skel ${name}\`: ${reason}` };
-  }
-  if (parsed.positionals.length > most) {
-    return {
-      ok: false,
-      message: `\`skel ${name}\` takes ${most === 1 ? "one argument" : `${most} arguments`}.`,
-    };
-  }
-  const values: Record<string, string | boolean | undefined> = {};
-  for (const [key, value] of Object.entries(parsed.values)) {
-    values[key] = Array.isArray(value) ? value.join(" ") : value;
-  }
-  return then(values, parsed.positionals);
 }
 
 function taskOf(
