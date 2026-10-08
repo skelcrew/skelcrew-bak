@@ -78,7 +78,7 @@ export class Loop {
     config: Config,
     tools: Tools,
     log: ReadableLog,
-    now: () => number = Date.now,
+    options: { now?: () => number } = {},
   ): { ok: true; loop: Loop } | { ok: false; reason: string } {
     const tasks = log.loadTasks();
     if (!tasks.ok) return { ok: false, reason: `Event ${tasks.row}: ${tasks.reason}` };
@@ -86,7 +86,7 @@ export class Loop {
     if (!unfinished.ok) {
       return { ok: false, reason: `Command ${unfinished.row}: ${unfinished.reason}` };
     }
-    const loop = new Loop(config, tools, log, { tasks: tasks.tasks, now });
+    const loop = new Loop(config, tools, log, { ...options, tasks: tasks.tasks });
     loop.dispatch(unfinished.commands.map(({ id, command }) => ({ command, id })));
     return { ok: true, loop };
   }

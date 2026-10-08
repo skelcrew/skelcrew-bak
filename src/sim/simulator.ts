@@ -194,7 +194,7 @@ export class Simulator {
   restart(): void {
     const agents = this.queue.filter((job) => job.kind === "input");
     this.queue = [];
-    const opened = Loop.open(this.config, this.tools(), this.log, () => this.tick());
+    const opened = Loop.open(this.config, this.tools(), this.log, { now: () => this.tick() });
     if (!opened.ok) throw new Error(opened.reason);
     this.loop = opened.loop;
     // Replies sent again go first, so an agent's report still comes after
