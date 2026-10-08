@@ -404,6 +404,74 @@ describe("a request the daemon fails on", () => {
   });
 });
 
+describe("a split's proposed tasks", () => {
+  // A daemon whose task 1 the planner split into two proposed tasks.
+  async function split() {
+    const repo = folder();
+    const served = await serve(repo, { socketFolder: join(folder(), "sockets"), tickMs: 10 });
+    if (!served.ok) throw new Error(served.message);
+    running.push(served.daemon);
+    const daemon = served.daemon;
+    await send(daemon.socket, add("Fix everything"));
+    const rows = async () => {
+      const listed = await send(daemon.socket, { type: "ls" });
+      return listed.ok && listed.result.kind === "tasks" ? listed.result.tasks : [];
+    };
+    await untilAsync(async () => (await rows())[0]?.state === "running");
+    const token = readFileSync(join(repo, ".skelcrew", "sessions", "1"), "utf8").trim();
+    const tasksFile = join(folder(), "tasks.md");
+    writeFileSync(
+      tasksFile,
+      "## Fix the cache\nClear it on write.\n\n## Add a test\nFor the export.\n",
+    );
+    await send(
+      daemon.socket,
+      { type: "send", task: null, input: { type: "triage_split", tasksFile } },
+      token,
+    );
+    await untilAsync(async () => (await rows())[0]?.phase === "ended");
+    return { daemon, rows };
+  }
+
+  test("are added as tasks of their own when you approve", async () => {
+    const { daemon, rows } = await split();
+
+    expect(
+      await send(daemon.socket, {
+        type: "send",
+        task: TaskId.parse(1),
+        input: { type: "approve" },
+      }),
+    ).toEqual({
+      ok: true,
+      result: { kind: "sent", task: TaskId.parse(1) },
+    });
+    expect((await rows()).map((row) => `#${row.task} ${row.title}`)).toEqual([
+      "#1 Fix everything",
+      "#2 Fix the cache",
+      "#3 Add a test",
+    ]);
+  });
+
+  test("are dropped when you deny", async () => {
+    const { daemon, rows } = await split();
+
+    await send(daemon.socket, {
+      type: "send",
+      task: TaskId.parse(1),
+      input: { type: "deny", note: "Not now." },
+    });
+    expect((await rows()).length).toBe(1);
+    expect(
+      await send(daemon.socket, {
+        type: "send",
+        task: TaskId.parse(1),
+        input: { type: "approve" },
+      }),
+    ).toEqual({ ok: false, message: "#1 has no proposals waiting." });
+  });
+});
+
 async function untilAsync(done: () => Promise<boolean>): Promise<void> {
   for (let waited = 0; !(await done()) && waited < 1_000; waited += 5) await Bun.sleep(5);
 }

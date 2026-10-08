@@ -78,6 +78,10 @@ export function handle(context: Context, call: Call, token: string | null): Hand
   // A new task gets the next number. Every other input names its task.
   const taskId = input.type === "add" ? nextId(loop) : call.task;
   if (taskId === null) return { ok: false, message: "Say which task." };
+  const task = loop.task(taskId);
+  if ((input.type === "approve" || input.type === "deny") && task?.phase === "ended") {
+    return decideProposals(loop, task, input.type === "approve");
+  }
   const decision = loop.send(taskId, { by: "you", ...input });
   if (!decision.ok) return { ok: false, message: decision.rejection.reason };
   return { ok: true, result: { kind: "sent", task: taskId } };
@@ -104,6 +108,32 @@ function fromAgent(context: Context, wire: WireInput, token: string): Handled {
   if (!made.ok) return made;
   const decision = loop.send(task.id, { by: "agent", session, ...made.input });
   if (!decision.ok) return { ok: false, message: decision.rejection.reason };
+  return { ok: true, result: { kind: "sent", task: task.id } };
+}
+
+// skel approve or deny on an ended task decides every proposal waiting, as
+// the spec's CLI says. The core records the decision, and each approved
+// proposal is then added as a task of its own.
+function decideProposals(loop: Loop, task: Task & { phase: "ended" }, approve: boolean): Handled {
+  const waiting = task.proposals.flatMap((proposal, i) =>
+    proposal.decision === "pending" ? [i] : [],
+  );
+  if (waiting.length === 0) return { ok: false, message: `#${task.id} has no proposals waiting.` };
+  const decision = loop.send(task.id, {
+    by: "you",
+    type: "decide_proposals",
+    approved: approve ? waiting : [],
+    denied: approve ? [] : waiting,
+  });
+  if (!decision.ok) return { ok: false, message: decision.rejection.reason };
+  if (approve) {
+    for (const i of waiting) {
+      const proposal = task.proposals[i];
+      if (proposal === undefined) continue;
+      const added = { title: proposal.title, description: proposal.description, plan: null };
+      loop.send(nextId(loop), { by: "you", type: "add", ...added });
+    }
+  }
   return { ok: true, result: { kind: "sent", task: task.id } };
 }
 
