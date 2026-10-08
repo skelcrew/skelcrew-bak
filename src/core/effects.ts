@@ -137,7 +137,9 @@ export function stopAgent(
   remove: { path: string; deleteBranch: boolean } | null,
 ): Effects {
   return {
-    events: [{ type: "session.stopping", session, request, removes: remove?.path ?? null }],
+    events: [
+      { type: "session.stopping", session, request, saves: save, removes: remove?.path ?? null },
+    ],
     commands: [{ type: "stop_session", taskId: task.id, request, session, save, remove }],
   };
 }

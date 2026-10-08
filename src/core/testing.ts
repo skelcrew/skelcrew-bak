@@ -32,7 +32,8 @@ export const workspace: Workspace = {
   branch: "skel/142-fix-empty-export",
 };
 
-export const copy: TesterCopy = { path: "/repo/.skelcrew/review/142", commit: sha("b") };
+// The tester's copy of the reviewed commit, defined below with it.
+export const copyPath = "/repo/.skelcrew/review/142";
 
 export type Run = { task: Task; events: TaskEvent[]; commands: Command[] };
 
@@ -200,6 +201,8 @@ export const doneAnswer = (report = "Search is slow because of N+1 queries."): I
 
 export const reviewed = { head: sha("c"), changedFiles: ["src/export/csv.ts"] };
 
+export const copy: TesterCopy = { path: copyPath, commit: reviewed.head };
+
 export const mainMerged = (request: number, facts = reviewed): Input => ({
   by: "plugin",
   type: "main_merged",
@@ -234,11 +237,13 @@ export const addPlanned = (
   plan: { intent, rigor, approve },
 });
 
-export const copyCreated = (request: number): Input => ({
+// The copy is of the reviewed commit unless told otherwise, such as an
+// answer's handed-over commit.
+export const copyCreated = (request: number, commit = reviewed.head): Input => ({
   by: "plugin",
   type: "copy_created",
   request,
-  copy,
+  copy: { path: copyPath, commit },
 });
 
 export const pass = (evidence = "bun test: 212 pass"): Input => ({
@@ -267,6 +272,13 @@ export const delivered = (request: number, commit = reviewed.head): Input => ({
   type: "delivered",
   request,
   delivered: { kind: "branch", commit, ref: "skel/142-fix-empty-export" },
+});
+
+export const deliveredReport = (request: number, commit = branch.head): Input => ({
+  by: "plugin",
+  type: "delivered",
+  request,
+  delivered: { kind: "report", path: "docs/answers/142.md", commit },
 });
 
 export const deliveryFailed = (request: number, message = "branch is checked out"): Input => ({

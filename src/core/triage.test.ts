@@ -93,12 +93,13 @@ describe("the planner's session", () => {
     expect(task.hold).toEqual({ kind: "crashed", exitCode: null, lastLine: "x" });
   });
 
-  test("an end report for another session is refused", () => {
+  test("an end report for another session changes nothing", () => {
     const other = SessionId.parse("session-other");
 
-    expect(next(triageRunning().task, sessionEnded(2, other))).toEqual({
-      ok: false,
-      rejection: { input: "session_ended", reason: "#142's agent isn't session-other." },
+    expect(next(triageRunning().task, sessionEnded(9, other))).toEqual({
+      ok: true,
+      events: [],
+      commands: [],
     });
   });
 });
@@ -121,7 +122,7 @@ describe("the planner proceeding", () => {
     expect(task.phase).toBe("build");
     if (task.phase !== "build") return;
     expect(task.step).toEqual({ kind: "awaiting_stop" });
-    expect(task.stopping).toEqual({ session: planner, request: 3, removes: null });
+    expect(task.stopping).toEqual({ session: planner, request: 3, saves: false, removes: null });
     expect(task.workspace).toEqual(workspace);
     expect(task.plan).toEqual({
       intent: "ship",

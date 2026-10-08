@@ -94,9 +94,8 @@ describe("resuming", () => {
   test("carries on with work already handed over, instead of building again", () => {
     const { events } = play(buildRunning().task, [
       done(),
-      pause,
-      stopped(5, builder, "saved"),
-      resume,
+      stopped(5, builder, "save_failed"),
+      retry,
       start,
     ]);
 
@@ -124,11 +123,13 @@ describe("retrying", () => {
     expect(task.phase === "triage" && task.step).toEqual({ kind: "queued" });
   });
 
-  test("sends a failed merge again", () => {
+  test("puts a failed merge back in line, and the next start sends it again", () => {
     const failed = play(buildRunning().task, [done(), stopped(5, builder, "saved"), mainFailed(6)]);
-    const { events, commands } = play(failed.task, [retry]);
+    const retried = play(failed.task, [retry]);
+    expect(types(retried.events)).toEqual(["task.released"]);
 
-    expect(types(events)).toEqual(["task.released", "main.requested"]);
+    const { events, commands } = play(retried.task, [start]);
+    expect(types(events)).toEqual(["main.requested"]);
     expect(commands).toEqual([{ type: "merge_main", taskId: id, request: 7, workspace }]);
   });
 

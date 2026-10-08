@@ -15,6 +15,7 @@ import {
   set,
   start,
   stopped,
+  tester,
   triageRunning,
   types,
 } from "./testing";
@@ -97,6 +98,7 @@ describe("setting during build or review", () => {
   test("clearing approval while it waits for you delivers, when nothing critical changed", () => {
     const awaiting = play(reviewRunning({ intent: "ship", rigor: "full", approve: true }).task, [
       pass(),
+      stopped(9, tester),
     ]).task;
     const { events } = play(awaiting, [set({ approve: false })]);
 

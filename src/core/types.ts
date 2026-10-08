@@ -182,6 +182,10 @@ export type PhaseState =
       // The workspace until its removal is confirmed. One whose work couldn't
       // be saved is never removed, and stays here.
       kept: Workspace | null;
+      // What the builder handed over and the tester's evidence, kept for the
+      // record. Null when the task ended before either.
+      handover: Handover | null;
+      evidence: string | null;
     };
 
 // What the builder handed over: a summary of the change, or for `answer` a
@@ -234,7 +238,11 @@ export type TaskBase = {
   // An agent being stopped. The task keeps its slot until the stop is
   // confirmed, and nothing new starts on the task before then.
   // `removes` is the path its stop removes once the work is safe, if any.
-  stopping: { session: SessionId; request: number; removes: string | null } | null;
+  // `saves` says whether the stop commits the agent's work first.
+  stopping: { session: SessionId; request: number; saves: boolean; removes: string | null } | null;
+  // The last save of the workspace failed, so it holds uncommitted work. It is
+  // never removed until a later save succeeds.
+  unsaved: boolean;
   // How many requests the task has sent that expect a reply. An event that
   // sends one carries its number, and evolve records it from there.
   requests: number;
@@ -398,7 +406,13 @@ export type EventBody =
       exitCode: number | null;
       lastLine: string;
     }
-  | { type: "session.stopping"; session: SessionId; request: number; removes: string | null }
+  | {
+      type: "session.stopping";
+      session: SessionId;
+      request: number;
+      saves: boolean;
+      removes: string | null;
+    }
   | {
       type: "session.stopped";
       session: SessionId;

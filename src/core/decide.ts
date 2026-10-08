@@ -28,6 +28,7 @@ import type {
   Config,
   Decide,
   Decision,
+  Delivered,
   Envelope,
   EventBody,
   Feedback,
@@ -56,6 +57,9 @@ export const decide: Decide = (task, envelope, config) => {
 
   if (input.type === "add" || input.type === "task_received") return create(task, input, ctx);
   if (task === null) return ctx.reject(`#${envelope.taskId} doesn't exist.`);
+  if (task.id !== envelope.taskId) {
+    return ctx.reject(`This input is for #${envelope.taskId}, but the task is #${task.id}.`);
+  }
 
   const cleanup = lateReply(task, input, ctx);
   if (cleanup !== null) return cleanup;
@@ -133,7 +137,8 @@ function lateReply(task: Task, input: Input, ctx: Context): Decision | null {
   }
   if (input.type === "session_started") {
     if (waitingForSession(task, input.request)) return null;
-    if (runningSession(task) === input.session) return ctx.accept([]);
+    const held = runningSession(task) === input.session || task.stopping?.session === input.session;
+    if (held) return ctx.accept([]);
     return ctx.accept(
       [],
       [
@@ -148,7 +153,37 @@ function lateReply(task: Task, input: Input, ctx: Context): Decision | null {
       ],
     );
   }
+  // Any other reply to a request the task no longer waits on changes nothing.
+  if (isReply(input) && !awaits(task, input)) return ctx.accept([]);
   return null;
+}
+
+type Reply = Extract<Input, { by: "plugin"; request: number }>;
+
+function isReply(input: Input): input is Reply {
+  return input.by === "plugin" && "request" in input;
+}
+
+// Whether the task waits for this reply: its request is the one the task's
+// step, or its stop on the way, records.
+function awaits(task: Task, input: Reply): boolean {
+  switch (input.type) {
+    case "workspace_created":
+    case "copy_created":
+    case "workspace_failed":
+      return waitingForWorkspace(task, input.request);
+    case "session_started":
+    case "session_failed":
+      return waitingForSession(task, input.request);
+    case "session_ended":
+      return runningSession(task) === input.session || waitingForSession(task, input.request);
+    case "stopped":
+      return task.stopping?.request === input.request;
+    default:
+      return (
+        task.phase !== "ended" && "request" in task.step && task.step.request === input.request
+      );
+  }
 }
 
 // Whether the task holds this workspace or tester's copy.
@@ -241,7 +276,7 @@ function lifecycle(
     case "start_now": {
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (task.hold !== null) return ctx.reject(`#${task.id} is held.`);
-      if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
+      if (!waitingForSlot(task)) return ctx.reject(`#${task.id} isn't waiting for a slot.`);
       // Two agents never work on a task at once, so the last one's stop is
       // confirmed first. The CLI waits and sends the start again.
       if (task.stopping !== null) {
@@ -249,7 +284,7 @@ function lifecycle(
           `#${task.id} is still stopping its last agent. Start waits until it has.`,
         );
       }
-      const go = carryOn(task);
+      const go = task.step.kind === "queued" ? carryOn(task) : resend(task);
       const yours: EventBody[] = input.type === "start_now" ? [{ type: "task.started_now" }] : [];
       return ctx.accept([...yours, ...go.events], go.commands);
     }
@@ -260,7 +295,7 @@ function lifecycle(
     case "pause": {
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (task.hold !== null) return ctx.reject(`#${task.id} is already held.`);
-      if (busy(task)) {
+      if (settling(task)) {
         return ctx.reject(`#${task.id} is busy with a step. skel pause waits until it settles.`);
       }
       const stop = stopRunning(task, next(task), null);
@@ -282,8 +317,9 @@ function lifecycle(
       if (task.hold === null) return ctx.reject(`#${task.id} isn't held.`);
       if (task.hold.kind === "paused")
         return ctx.reject(`#${task.id} is paused. Resume it instead.`);
-      const again = resend(task);
-      return ctx.accept([{ type: "task.released" }, ...again.events], again.commands);
+      // Back in line. A failed merge, spec commit or delivery is sent again
+      // when the scheduler starts it, so a retry never goes past max_running.
+      return ctx.accept([{ type: "task.released" }]);
     }
 
     // The task ends, whatever it was doing. A working agent is stopped with
@@ -291,7 +327,8 @@ function lifecycle(
     // it holds the work.
     case "kill": {
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
-      const { workspace } = task;
+      // A workspace holding work that couldn't be saved is never removed.
+      const workspace = task.unsaved ? null : task.workspace;
       const remove = workspace === null ? null : { path: workspace.path, deleteBranch: false };
       const stop = stopRunning(task, next(task), remove);
       const events: EventBody[] = [{ type: "task.killed" }, ...stop.events];
@@ -325,7 +362,7 @@ function yourCalls(
     // Overrules the planner's call. See setPlan.
     case "set":
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
-      if (busy(task)) {
+      if (settling(task)) {
         return ctx.reject(`#${task.id} is busy with a step. skel set waits until it settles.`);
       }
       return setPlan(task, input, ctx);
@@ -504,7 +541,10 @@ function replies(
           held({ kind: "failed", step: "save", message: input.message }),
         ]);
       }
-      const after = afterStop(task, stopping.removes, input.saved);
+      // The workspace holds unsaved work if this stop's save failed, or if
+      // an earlier one did and this stop didn't save.
+      const unsaved = stopping.saves ? input.saved === "save_failed" : task.unsaved;
+      const after = afterStop(task, stopping.removes, unsaved);
       return ctx.accept([confirmed, ...after.events], after.commands);
     }
 
@@ -528,15 +568,11 @@ function replies(
 // What happens once an agent's stop is confirmed. The next agent on a task
 // only starts now, so two never work on it at once. A task killed while an
 // agent was stopping removes its workspace now, once its work is safe.
-function afterStop(
-  task: Task,
-  removed: string | null,
-  saved: "saved" | "nothing_to_save" | "save_failed",
-): Effects {
+function afterStop(task: Task, removed: string | null, unsaved: boolean): Effects {
   const none: Effects = { events: [], commands: [] };
   if (task.phase === "ended") {
     const { kept } = task;
-    if (kept === null || kept.path === removed || saved === "save_failed") return none;
+    if (kept === null || kept.path === removed || unsaved) return none;
     return {
       events: [{ type: "workspace.removed", path: kept.path }],
       commands: [{ type: "remove_workspace", path: kept.path, deleteBranch: false }],
@@ -828,6 +864,15 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
       if (!waitingForWorkspace(task, input.request)) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
+      // A copy of any other commit would review something that isn't
+      // delivered. It is removed, and the task waits for you.
+      if (input.copy.commit !== task.reviewed.head) {
+        const message = `The copy is of ${input.copy.commit}, but the reviewed commit is ${task.reviewed.head}.`;
+        return ctx.accept(
+          [held({ kind: "failed", step: "workspace", message })],
+          [{ type: "remove_workspace", path: input.copy.path, deleteBranch: false }],
+        );
+      }
       const tester = startTester(task, input.copy, next(task));
       return ctx.accept(
         [{ type: "copy.created", copy: input.copy }, ...tester.events],
@@ -941,7 +986,18 @@ function setPlan(
   if (plan.intent !== task.plan.intent) return restartBuild(task, plan, [fields], ctx);
 
   const { step, reviewed, handover } = task;
+  // Set while a failed delivery waits for your retry: it now waits for your
+  // sign-off first.
+  const approvalSet = plan.approve && !task.plan.approve && step.kind === "delivering";
+  if (approvalSet && reviewed !== null) {
+    const critical = criticalFiles(reviewed.changedFiles, ctx.config.critical);
+    return ctx.accept([fields, { type: "approval.requested", criticalFiles: critical }]);
+  }
+
   const approvalLifted = step.kind === "awaiting_approval" && !plan.approve;
+  if (approvalLifted && task.hold !== null) {
+    return ctx.reject(`#${task.id} is held. Resume it first.`);
+  }
   if (approvalLifted && reviewed !== null && handover !== null) {
     if (criticalFiles(reviewed.changedFiles, ctx.config.critical).length === 0) {
       const evidence = task.phase === "review" ? task.evidence : null;
@@ -1013,6 +1069,7 @@ function finish(
       if (step.kind !== "awaiting_approval" || reviewed === null || handover === null) {
         return ctx.reject(`#${task.id} isn't waiting for your sign-off.`);
       }
+      if (task.hold !== null) return ctx.reject(`#${task.id} is held. Resume it first.`);
       const out = deliver(task, task.plan, reviewed, handover, evidence, next(task));
       return ctx.accept(
         [{ type: "approval.given", commit: reviewed.head }, ...out.events],
@@ -1035,9 +1092,12 @@ function finish(
       if (step.kind !== "delivering" || step.request !== input.request) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
+      const wrong = deliveryMismatch(task, input.delivered);
+      if (wrong !== null)
+        return ctx.accept([held({ kind: "failed", step: "delivery", message: wrong })]);
       const events: EventBody[] = [{ type: "output.delivered", delivered: input.delivered }];
       const commands: Command[] = [];
-      if (task.workspace !== null) {
+      if (task.workspace !== null && !task.unsaved) {
         events.push({ type: "workspace.removed", path: task.workspace.path });
         commands.push({ type: "remove_workspace", path: task.workspace.path, deleteBranch: false });
       }
@@ -1086,9 +1146,40 @@ function held(hold: Hold): EventBody {
   return { type: "task.held", hold };
 }
 
+// Whether the task waits in line for a slot: queued, or holding a step a
+// failure answered, which the next start sends again.
+function waitingForSlot(task: Exclude<Task, { phase: "ended" }>): boolean {
+  const { step } = task;
+  if (step.kind === "queued") return true;
+  if (
+    step.kind === "committing_spec" ||
+    step.kind === "merging_main" ||
+    step.kind === "delivering"
+  ) {
+    return step.request === null;
+  }
+  return false;
+}
+
+// Why a delivery doesn't match what was reviewed, or null if it does. It
+// must be exactly the reviewed commit, as a report for an `answer` and a
+// branch otherwise.
+function deliveryMismatch(task: TaskIn<"build" | "review">, delivered: Delivered): string | null {
+  const reviewed = task.reviewed;
+  if (reviewed === null) return `#${task.id} has no reviewed commit.`;
+  const kind = task.plan.intent === "answer" ? "report" : "branch";
+  if (delivered.kind !== kind)
+    return `Delivered a ${delivered.kind}, but #${task.id} hands over a ${kind}.`;
+  if (delivered.commit !== reviewed.head) {
+    return `Delivered ${delivered.commit}, but the reviewed commit is ${reviewed.head}.`;
+  }
+  return null;
+}
+
 // Whether a step is under way that a pause must wait for: something is being
 // made, started, merged or delivered.
-function busy(task: Exclude<Task, { phase: "ended" }>): boolean {
+function settling(task: Exclude<Task, { phase: "ended" }>): boolean {
+  if (task.stopping !== null) return true;
   switch (task.step.kind) {
     case "creating_workspace":
     case "creating_copy":

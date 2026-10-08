@@ -9,6 +9,7 @@ import {
   copy,
   copyCreated,
   delivered,
+  deliveredReport,
   deliveryFailed,
   deny,
   done,
@@ -181,7 +182,7 @@ describe("delivery", () => {
 
     expect(task.hold).toEqual({ kind: "failed", step: "delivery", message: "push rejected" });
     expect(task.phase === "review" && task.step).toEqual({ kind: "delivering", request: null });
-    expect(next(task, delivered(10)).ok).toBe(false);
+    expect(next(task, delivered(10))).toEqual({ ok: true, events: [], commands: [] });
   });
 
   test("of an answer keeps the tasks it proposes, waiting for you", () => {
@@ -195,11 +196,11 @@ describe("delivery", () => {
         branch,
       },
       stopped(5, builder),
-      copyCreated(6),
+      copyCreated(6, branch.head),
       sessionStarted(7, tester),
       pass(),
       stopped(8, tester),
-      delivered(9, branch.head),
+      deliveredReport(9),
     ]).task;
 
     expect(answered.phase === "ended" && answered.proposals).toEqual([

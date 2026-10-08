@@ -67,6 +67,8 @@ type World = {
   // on their way, with the workspace each removes.
   liveWorkspaces: Set<string>;
   liveSessions: Set<SessionId>;
+  // For rule 15: workspaces holding work a stop failed to save.
+  unsaved: Set<string>;
   stops: Map<number, { session: SessionId; removes: string | null }>;
   lastInput?: Input; // for debugging a failure
 };
@@ -83,6 +85,7 @@ export function newWorld(config: Config, id = TaskId.parse(142)): World {
     approved: null,
     liveWorkspaces: new Set(),
     liveSessions: new Set(),
+    unsaved: new Set(),
     stops: new Map(),
   };
 }
@@ -132,7 +135,9 @@ function candidates(world: World): Input[] {
       { by: "daemon", type: "usage", session, usage: usageOf(world, session, 100) },
       { by: "daemon", type: "usage", session, usage: usageOf(world, session, -100) },
     );
-    if (started.role === "planner") {
+    // Every session may send any role's reports, so a report from the
+    // wrong role is tried too (rule 2).
+    {
       const plan = { rigor: "full" as const, approve: false, brief: "Do it." };
       inputs.push(
         {
@@ -165,33 +170,29 @@ function candidates(world: World): Input[] {
         { by: "agent", session, type: "triage_decline", reason: "Done already." },
       );
     }
-    if (started.role === "builder") {
-      inputs.push(
-        { by: "agent", session, type: "done", summary: "Done.", branch: changes(["src/a.ts"]) },
-        {
-          by: "agent",
-          session,
-          type: "done",
-          summary: "Done.",
-          branch: changes(["src/auth/x.ts"]),
-        },
-        { by: "agent", session, type: "done", summary: "Nothing.", branch: changes([]) },
-        {
-          by: "agent",
-          session,
-          type: "done_answer",
-          report: "Here's why.",
-          proposals: [{ title: "Follow up", description: "" }],
-          branch: changes([]),
-        },
-      );
-    }
-    if (started.role === "tester") {
-      inputs.push(
-        { by: "agent", session, type: "pass", evidence: "Tests pass." },
-        { by: "agent", session, type: "changes", findings: "Fix the header." },
-      );
-    }
+    inputs.push(
+      { by: "agent", session, type: "done", summary: "Done.", branch: changes(["src/a.ts"]) },
+      {
+        by: "agent",
+        session,
+        type: "done",
+        summary: "Done.",
+        branch: changes(["src/auth/x.ts"]),
+      },
+      { by: "agent", session, type: "done", summary: "Nothing.", branch: changes([]) },
+      {
+        by: "agent",
+        session,
+        type: "done_answer",
+        report: "Here's why.",
+        proposals: [{ title: "Follow up", description: "" }],
+        branch: changes([]),
+      },
+    );
+    inputs.push(
+      { by: "agent", session, type: "pass", evidence: "Tests pass." },
+      { by: "agent", session, type: "changes", findings: "Fix the header." },
+    );
   }
   return inputs;
 }
@@ -212,6 +213,12 @@ function repliesTo(command: Command): Input[] {
           type: "copy_created",
           request: command.request,
           copy: { path: copyAt(command.request).path, commit: command.commit },
+        },
+        {
+          by: "plugin",
+          type: "copy_created",
+          request: command.request,
+          copy: copyAt(command.request), // a copy of the wrong commit
         },
         { by: "plugin", type: "workspace_failed", request: command.request, message: "disk" },
       ];
@@ -272,16 +279,23 @@ function repliesTo(command: Command): Input[] {
         { by: "plugin", type: "main_conflict", request: command.request, files: ["src/a.ts"] },
         { by: "plugin", type: "main_failed", request: command.request, message: "lock" },
       ];
-    case "deliver":
+    // The right output, one of the wrong commit, and a failure.
+    case "deliver": {
+      const as = (commit: CommitSha): Input => ({
+        by: "plugin",
+        type: "delivered",
+        request: command.request,
+        delivered:
+          command.intent === "answer"
+            ? { kind: "report", path: "docs/answers/142.md", commit }
+            : { kind: "branch", commit, ref: "skel/142" },
+      });
       return [
-        {
-          by: "plugin",
-          type: "delivered",
-          request: command.request,
-          delivered: { kind: "branch", commit: command.reviewed.head, ref: "skel/142" },
-        },
+        as(command.reviewed.head),
+        as(sha(999)),
         { by: "plugin", type: "delivery_failed", request: command.request, message: "rejected" },
       ];
+    }
     default:
       return [];
   }
@@ -391,7 +405,7 @@ export function step(world: World, choice: Choice, at: number): void {
     }
   }
   track(world, decision.events);
-  trackResources(world, input, decision.commands);
+  trackResources(world, input, decision.events, decision.commands);
 
   checkTask(world, task);
 }
@@ -415,13 +429,31 @@ function track(world: World, events: TaskEvent[]): void {
 
 // What exists out there after an accepted input: workspaces and sessions
 // come alive with their replies, and go with removals and confirmed stops.
-function trackResources(world: World, input: Input, commands: Command[]): void {
+function trackResources(
+  world: World,
+  input: Input,
+  events: TaskEvent[],
+  commands: Command[],
+): void {
   if (input.type === "workspace_created") world.liveWorkspaces.add(input.workspace.path);
+  // Merging main commits any uncommitted work first.
+  const merged = events.some((e) => e.type === "main.merged" || e.type === "main.conflict");
+  if (merged && world.task?.phase !== "ended" && world.task?.workspace) {
+    world.unsaved.delete(world.task.workspace.path);
+  }
   if (input.type === "copy_created") world.liveWorkspaces.add(input.copy.path);
   if (input.type === "session_started") world.liveSessions.add(input.session);
   if (input.type === "session_ended") world.liveSessions.delete(input.session);
-  if (input.type === "stopped") {
+  // Only a stop the core recorded counts. A late, repeated one changes nothing.
+  if (input.type === "stopped" && events.some((event) => event.type === "session.stopped")) {
     const stop = world.stops.get(input.request);
+    const started = world.sessions.get(input.session);
+    const workspacePath =
+      world.task?.phase === "ended" ? world.task.kept?.path : world.task?.workspace?.path;
+    if (started?.role === "builder" && started.edits && workspacePath !== undefined) {
+      if (input.saved === "save_failed") world.unsaved.add(workspacePath);
+      else world.unsaved.delete(workspacePath);
+    }
     world.stops.delete(input.request);
     world.liveSessions.delete(input.session);
     if (stop?.removes && input.saved !== "save_failed") world.liveWorkspaces.delete(stop.removes);
@@ -501,6 +533,12 @@ function checkDecision(
       expect(before?.stopping === null || confirmed).toBe(true);
     }
 
+    // 15: a workspace holding unsaved work is never removed.
+    if (command.type === "remove_workspace") expect(world.unsaved.has(command.path)).toBe(false);
+    if (command.type === "stop_session" && command.remove !== null) {
+      expect(world.unsaved.has(command.remove.path)).toBe(false);
+    }
+
     // 15: work that could hold edits is saved when its builder stops.
     if (command.type === "stop_session" && command.request !== null) {
       const started = world.sessions.get(command.session);
@@ -532,8 +570,11 @@ function checkDecision(
     }
   }
 
-  // 12, 19: a session that ends without reporting holds the task.
-  if (input.type === "session_ended") expect(after.hold?.kind).toBe("crashed");
+  // 12, 19: a session that ends without reporting holds the task. An end
+  // report for a session that isn't the task's agent changes nothing.
+  if (input.type === "session_ended" && events.length > 0) {
+    expect(after.hold?.kind).toBe("crashed");
+  }
 
   // 18: nothing leaves an ending, and an ended task takes only cleanup.
   if (before?.phase === "ended") {
@@ -657,7 +698,8 @@ function sharedLifecycle(config: Config, choices: Choice[]): void {
         let task = owner.task;
         for (const event of decision.events) {
           const evolved = evolve(task, event);
-          if (evolved.ok) task = evolved.task;
+          if (!evolved.ok) throw new Error(`evolve refused decide's event: ${evolved.reason}`);
+          task = evolved.task;
         }
         owner.task = task;
         owner.log.push(...decision.events);

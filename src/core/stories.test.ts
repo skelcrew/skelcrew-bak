@@ -15,6 +15,7 @@ import {
   config,
   copyCreated,
   delivered,
+  deliveredReport,
   done,
   id,
   mainMerged,
@@ -107,11 +108,11 @@ describe("golden stories", () => {
           branch,
         },
         stopped(3, builder),
-        copyCreated(4),
+        copyCreated(4, branch.head),
         sessionStarted(5, tester),
         pass(),
         stopped(6, tester),
-        delivered(7, branch.head),
+        deliveredReport(7),
       ),
     ).toMatchSnapshot();
   });

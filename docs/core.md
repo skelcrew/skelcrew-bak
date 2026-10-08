@@ -283,6 +283,9 @@ the sections above don't make. The code and its tests follow them.
   session starting, a spec being committed, main merging, or a delivery. They also wait
   while an agent is still stopping. The core refuses with "waits until it settles", and the
   CLI sends the input again. Kill always works.
+- **Approval set during a delivery is too late for it.** A delivery under way finishes.
+  Setting approval on a task whose delivery failed makes it wait for your sign-off first.
+- **Approving, or clearing approval, waits until a held task is resumed.**
 - **A start carries on from where the task waits.** A build that was handed over merges or
   goes to review instead of building again. A review whose tester crashed reuses its copy.
 
@@ -291,10 +294,15 @@ the sections above don't make. The code and its tests follow them.
 - **A hold only sends a step with an agent back to the queue.** A merge, a spec commit, an
   approval or a delivery keeps its step, so an approval still waits for you.
 - **A failure answers its request.** After a failed merge, spec commit or delivery, nothing
-  waits until your retry, which sends a new request. A reply after the failure changes
-  nothing.
+  waits for a reply. Your retry puts the task back in line, and the scheduler's next start
+  sends the step again, so a retry never goes past `max_running`.
+- **What comes back must match what was asked.** A tester's copy of any other commit than
+  the reviewed one is removed, and holds the task. So does a delivery of another commit, or
+  of the wrong kind: a branch for an `answer`, or a report for anything else.
 - **A failed save on a task already held keeps the existing hold.** `session.stopped`
   records the failed save, and the work stays in the workspace.
+- **A workspace holding unsaved work is never removed**, not even by kill, until a later
+  save succeeds. The task records it.
 - **A stop takes the question of the agent it stops**, so no question outlives its agent.
 
 **Workspaces and stops**
@@ -304,9 +312,11 @@ the sections above don't make. The code and its tests follow them.
   the branch, since it holds the work. Delivery removes the worktree and keeps the branch.
 - **An ended task keeps track of its workspace** until its removal is confirmed. It accepts
   only a stop's confirmation, a workspace removal, usage, and your decisions on proposals.
-- **Late replies are cleaned up**: a workspace or copy that arrives late is removed, and a
+- **Late replies change nothing.** Any reply to a request the task no longer waits on is
+  accepted and records nothing. A workspace or copy that arrives late is removed, and a
   session that starts late is stopped. That stop has no request, since nobody waits on it.
-  A repeated reply for what the task already holds is ignored.
+  A repeated reply for what the task already holds, or is stopping, is ignored.
+- **An ended task keeps what was handed over** and the tester's evidence, for the record.
 - **The scheduler skips a task while its last agent is stopping**, and that task keeps its
   slot until the stop is confirmed, even once held or ended.
 

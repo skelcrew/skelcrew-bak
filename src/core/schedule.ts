@@ -43,26 +43,40 @@ export function slotsInUse(tasks: readonly Task[], inFlight: number): number {
 function holdsSlot(task: Task): boolean {
   if (task.stopping !== null) return true;
   if (task.phase === "ended" || task.hold !== null) return false;
+  if (task.attached) return true;
   if (task.question !== null) return false;
-  switch (task.step.kind) {
+  const { step } = task;
+  switch (step.kind) {
     case "creating_workspace":
     case "creating_copy":
     case "starting":
     case "running":
     case "awaiting_stop":
+      return true;
+    // Null once a failure answered it, and the task waits in line again.
     case "committing_spec":
     case "merging_main":
-      return true;
+      return step.request !== null;
     default:
       return false;
   }
 }
 
-// Queued, not held, and with no agent still stopping, since the next agent
-// on a task starts only once the last one's stop is confirmed.
+// Waiting in line: queued, or holding a step a failure answered, which the
+// next start sends again. Not held, and with no agent still stopping, since
+// the next agent on a task starts only once the last one's stop is confirmed.
 function waitingForSlot(task: Task): boolean {
   if (task.phase === "ended" || task.hold !== null || task.stopping !== null) return false;
-  return task.step.kind === "queued";
+  const { step } = task;
+  if (step.kind === "queued") return true;
+  if (
+    step.kind === "committing_spec" ||
+    step.kind === "merging_main" ||
+    step.kind === "delivering"
+  ) {
+    return step.request === null;
+  }
+  return false;
 }
 
 function laneOrder(task: Task): number {

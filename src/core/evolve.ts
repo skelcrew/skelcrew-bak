@@ -1,10 +1,12 @@
 // Evolve: folds one event into a task. It only applies facts that decide
-// already accepted, so it holds no rules of its own. Replaying a task's
+// already accepted, so it makes no decisions of its own. Replaying a task's
 // events through it, starting from null, rebuilds the task exactly.
 //
 // Events that apply in any phase come first, then one function per phase.
-// An event that doesn't fit is refused with the reason, so a damaged log
-// stops replay instead of rebuilding a wrong task.
+// It does check that each event fits the task, such as a hold on a task that
+// isn't held, and refuses one that doesn't with the reason. decide never
+// produces such an event, so a refusal means decide and evolve disagree, or
+// the log is damaged. Replay then stops instead of rebuilding a wrong task.
 
 import type { TaskIn } from "./task";
 import type {
@@ -26,6 +28,8 @@ export const evolve: Evolve = (task, event) => {
     return ok(received(event));
   }
   if (task === null) return refuse(event, `#${event.taskId} doesn't exist`);
+  if (task.id !== event.taskId)
+    return refuse(event, `it belongs to #${event.taskId}, not #${task.id}`);
 
   switch (event.type) {
     // A held task's agent is stopped, so its question goes with it, and the
@@ -129,7 +133,12 @@ export const evolve: Evolve = (task, event) => {
         ...task,
         question: asked ? null : task.question,
         keptAnswer: asked ? null : task.keptAnswer,
-        stopping: { session: event.session, request: event.request, removes: event.removes },
+        stopping: {
+          session: event.session,
+          request: event.request,
+          saves: event.saves,
+          removes: event.removes,
+        },
         attached: false,
         requests: Math.max(task.requests, event.request),
       });
@@ -137,14 +146,17 @@ export const evolve: Evolve = (task, event) => {
 
     // An ended task's workspace goes with the stop that removes it, unless
     // the save failed. Then it stays, so no work is thrown away.
+    // A stop that saved, or found nothing to save, leaves the workspace
+    // clean. One that failed to save leaves it holding uncommitted work.
     case "session.stopped": {
       const { stopping } = task;
       if (stopping === null) return refuse(event, `#${task.id} isn't stopping an agent`);
+      const unsaved = stopping.saves ? event.saved === "save_failed" : task.unsaved;
       const removed = event.saved !== "save_failed" ? stopping.removes : null;
       if (task.phase === "ended" && removed !== null && task.kept?.path === removed) {
-        return ok({ ...task, stopping: null, kept: null });
+        return ok({ ...task, stopping: null, unsaved, kept: null });
       }
-      return ok({ ...task, stopping: null });
+      return ok({ ...task, stopping: null, unsaved });
     }
 
     case "workspace.removed":
@@ -180,6 +192,7 @@ function received(event: Extract<TaskEvent, { type: "task.received" }>): Task {
     attached: false,
     lane: "queued",
     stopping: null,
+    unsaved: false,
     requests: 0,
     usage: {},
   };
@@ -303,11 +316,13 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
       return ok(withRequest(task, event.request, { kind: "merging_main", request: event.request }));
 
     // A `try` finishes in build, so it only keeps the merged commit. Every
-    // other intent moves on to review with it.
+    // other intent moves on to review with it. Merging main committed any
+    // uncommitted work first, so nothing is left unsaved.
     case "main.merged":
     case "review.ready": {
-      if (task.plan.intent === "try") return ok({ ...task, reviewed: event.reviewed });
-      const reviewing = toReview(task, event.reviewed);
+      const saved = event.type === "main.merged" ? { ...task, unsaved: false } : task;
+      if (task.plan.intent === "try") return ok({ ...saved, reviewed: event.reviewed });
+      const reviewing = toReview(saved, event.reviewed);
       if (reviewing === null) return refuse(event, `#${task.id} has no handed-over work`);
       return ok(reviewing);
     }
@@ -317,6 +332,7 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
     case "main.conflict":
       return ok({
         ...task,
+        unsaved: false,
         step: { kind: "queued" },
         loops: task.loops + 1,
         feedback: { kind: "conflict", files: event.files },
@@ -411,6 +427,7 @@ function base(task: Task): TaskBase {
     attached: task.attached,
     lane: task.lane,
     stopping: task.stopping,
+    unsaved: task.unsaved,
     requests: task.requests,
     usage: task.usage,
   };
@@ -510,6 +527,8 @@ function toEnded(
     outcome,
     proposals,
     kept: task.workspace,
+    handover: task.phase === "triage" ? null : task.handover,
+    evidence: task.phase === "review" ? task.evidence : null,
   };
 }
 
