@@ -127,7 +127,7 @@ function candidates(world: World): Input[] {
 
   for (const command of world.sent) inputs.push(...repliesTo(command));
 
-  for (const [session, started] of world.sessions) {
+  for (const session of world.sessions.keys()) {
     inputs.push(
       { by: "agent", session, type: "ask", text: "Which?", options: ["A", "B"] },
       { by: "agent", session, type: "progress", text: "Working." },
@@ -237,21 +237,33 @@ function repliesTo(command: Command): Input[] {
         },
       ];
     }
-    // A stop reports a save, or a failed one, only when it was asked to save.
-    case "stop_session":
-      if (command.request === null) return [];
-      return (
-        command.save
-          ? (["saved", "nothing_to_save", "save_failed"] as const)
-          : (["nothing_to_save"] as const)
-      ).map((saved) => ({
-        by: "plugin",
-        type: "stopped",
-        request: command.request ?? 0,
-        session: command.session,
-        saved,
-        message: "",
-      }));
+    // Every outcome, even a failed save for a stop that didn't save, and a
+    // reply naming another session. Neither may change anything it shouldn't.
+    case "stop_session": {
+      const { request, session } = command;
+      if (request === null) return [];
+      const outcomes = ["saved", "nothing_to_save", "save_failed"] as const;
+      return [
+        ...outcomes.map(
+          (saved): Input => ({
+            by: "plugin",
+            type: "stopped",
+            request,
+            session,
+            saved,
+            message: "",
+          }),
+        ),
+        {
+          by: "plugin",
+          type: "stopped",
+          request,
+          session: SessionId.parse("session-stranger"),
+          saved: "saved",
+          message: "",
+        },
+      ];
+    }
     case "commit_spec":
       return [
         {
@@ -450,13 +462,15 @@ function trackResources(
     const started = world.sessions.get(input.session);
     const workspacePath =
       world.task?.phase === "ended" ? world.task.kept?.path : world.task?.workspace?.path;
+    const confirmed = events.find((event) => event.type === "session.stopped");
+    const saved = confirmed?.type === "session.stopped" ? confirmed.saved : input.saved;
     if (started?.role === "builder" && started.edits && workspacePath !== undefined) {
-      if (input.saved === "save_failed") world.unsaved.add(workspacePath);
+      if (saved === "save_failed") world.unsaved.add(workspacePath);
       else world.unsaved.delete(workspacePath);
     }
     world.stops.delete(input.request);
     world.liveSessions.delete(input.session);
-    if (stop?.removes && input.saved !== "save_failed") world.liveWorkspaces.delete(stop.removes);
+    if (stop?.removes && saved !== "save_failed") world.liveWorkspaces.delete(stop.removes);
   }
   for (const command of commands) {
     if (command.type === "remove_workspace") world.liveWorkspaces.delete(command.path);
@@ -525,6 +539,18 @@ function checkDecision(
       expect(after.phase !== "ended" && after.phase !== "triage" && after.plan.intent).not.toBe(
         "answer",
       );
+    }
+
+    // 14: a session starts only in a workspace that exists, or one this very
+    // reply brought.
+    if (command.type === "start_session") {
+      const arrived =
+        input.type === "workspace_created"
+          ? input.workspace.path
+          : input.type === "copy_created"
+            ? input.copy.path
+            : null;
+      expect(world.liveWorkspaces.has(command.cwd) || command.cwd === arrived).toBe(true);
     }
 
     // 10: the next agent starts only once the last one's stop is confirmed.
@@ -634,6 +660,9 @@ function checkTask(world: World, task: Task): void {
     expect(runningSession(task) === session || stopping.has(session)).toBe(true);
   }
 
+  // 14, the other way: everything the task holds really exists.
+  for (const path of heldPaths(task)) expect(world.liveWorkspaces.has(path)).toBe(true);
+
   // 23: replaying the log rebuilds the task exactly.
   let replayed: Task | null = null;
   for (const event of world.log) {
@@ -642,6 +671,17 @@ function checkTask(world: World, task: Task): void {
     replayed = evolved.task;
   }
   expect(replayed).toEqual(task);
+}
+
+function heldPaths(task: Task): string[] {
+  switch (task.phase) {
+    case "ended":
+      return task.kept === null ? [] : [task.kept.path];
+    case "review":
+      return [task.workspace.path, ...(task.copy === null ? [] : [task.copy.path])];
+    default:
+      return task.workspace === null ? [] : [task.workspace.path];
+  }
 }
 
 function holdsPath(task: Task, path: string): boolean {

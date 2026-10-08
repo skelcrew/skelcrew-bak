@@ -4,7 +4,7 @@ import {
   add,
   ask,
   id,
-  next,
+  peek,
   planner,
   play,
   proceed,
@@ -96,7 +96,7 @@ describe("the planner's session", () => {
   test("an end report for another session changes nothing", () => {
     const other = SessionId.parse("session-other");
 
-    expect(next(triageRunning().task, sessionEnded(9, other))).toEqual({
+    expect(peek(triageRunning().task, sessionEnded(9, other))).toEqual({
       ok: true,
       events: [],
       commands: [],
@@ -216,7 +216,7 @@ describe("the planner proceeding", () => {
   test("is refused while the planner's own question is open", () => {
     const { task } = play(triageRunning().task, [ask(planner)]);
 
-    expect(next(task, proceed())).toEqual({
+    expect(peek(task, proceed())).toEqual({
       ok: false,
       rejection: {
         input: "triage_proceed",

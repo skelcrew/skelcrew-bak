@@ -64,7 +64,7 @@ export function run(...inputs: Input[]): Run {
 }
 
 // What decide says to one more input, without applying it.
-export function next(task: Task | null, input: Input, cfg: Config = config): Decision {
+export function peek(task: Task | null, input: Input, cfg: Config = config): Decision {
   return decide(task, { taskId: id, at: 9_000, input }, cfg);
 }
 

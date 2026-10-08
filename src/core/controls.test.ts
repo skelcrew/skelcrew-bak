@@ -7,8 +7,8 @@ import {
   id,
   kill,
   mainFailed,
-  next,
   pause,
+  peek,
   planner,
   play,
   resume,
@@ -54,7 +54,7 @@ describe("pausing", () => {
   test("waits while a step is under way, such as a workspace being made", () => {
     const { task } = run(add(), start);
 
-    expect(next(task, pause)).toEqual({
+    expect(peek(task, pause)).toEqual({
       ok: false,
       rejection: {
         input: "pause",
@@ -66,7 +66,7 @@ describe("pausing", () => {
   test("is refused for a task that is already held", () => {
     const { task } = run(add(), pause);
 
-    expect(next(task, pause)).toEqual({
+    expect(peek(task, pause)).toEqual({
       ok: false,
       rejection: { input: "pause", reason: "#142 is already held." },
     });
@@ -75,7 +75,7 @@ describe("pausing", () => {
   test("keeps a held task from starting", () => {
     const { task } = run(add(), pause);
 
-    expect(next(task, start)).toEqual({
+    expect(peek(task, start)).toEqual({
       ok: false,
       rejection: { input: "start", reason: "#142 is held." },
     });
@@ -105,7 +105,7 @@ describe("resuming", () => {
   test("is refused for a task held by a failure, which retry lifts", () => {
     const { task } = run(add(), start, workspaceCreated(1), sessionFailed(2));
 
-    expect(next(task, resume)).toEqual({
+    expect(peek(task, resume)).toEqual({
       ok: false,
       rejection: { input: "resume", reason: "#142 isn't paused. Retry it instead." },
     });
@@ -136,14 +136,14 @@ describe("retrying", () => {
   test("is refused for a paused task, which resume lifts", () => {
     const { task } = run(add(), pause);
 
-    expect(next(task, retry)).toEqual({
+    expect(peek(task, retry)).toEqual({
       ok: false,
       rejection: { input: "retry", reason: "#142 is paused. Resume it instead." },
     });
   });
 
   test("is refused for a task that isn't held", () => {
-    expect(next(run(add()).task, retry)).toEqual({
+    expect(peek(run(add()).task, retry)).toEqual({
       ok: false,
       rejection: { input: "retry", reason: "#142 isn't held." },
     });
@@ -194,7 +194,7 @@ describe("killing", () => {
   test("is refused for a task that has ended", () => {
     const { task } = run(add(), kill);
 
-    expect(next(task, kill)).toEqual({
+    expect(peek(task, kill)).toEqual({
       ok: false,
       rejection: { input: "kill", reason: "#142 has ended." },
     });
@@ -211,7 +211,7 @@ describe("starting now", () => {
   test("is refused for a held task", () => {
     const { task } = run(add(), pause);
 
-    expect(next(task, startNow)).toEqual({
+    expect(peek(task, startNow)).toEqual({
       ok: false,
       rejection: { input: "start_now", reason: "#142 is held." },
     });
@@ -260,7 +260,7 @@ describe("usage", () => {
   test("is refused when lower than that session's last report, since it is older", () => {
     const { task } = play(buildRunning().task, [usage(builder, 5_000)]);
 
-    expect(next(task, usage(builder, 4_000))).toEqual({
+    expect(peek(task, usage(builder, 4_000))).toEqual({
       ok: false,
       rejection: {
         input: "usage",
@@ -280,7 +280,7 @@ describe("a change in the tracker", () => {
   test("is refused, since tasks move only through Skelcrew", () => {
     const outside: Input = { by: "plugin", type: "outside_change", what: "issue closed" };
 
-    expect(next(run(add()).task, outside)).toEqual({
+    expect(peek(run(add()).task, outside)).toEqual({
       ok: false,
       rejection: {
         input: "outside_change",

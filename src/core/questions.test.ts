@@ -3,7 +3,7 @@ import { SessionId } from "./ids";
 import {
   ask,
   deliverAnswer,
-  next,
+  peek,
   planner,
   play,
   reply,
@@ -29,7 +29,7 @@ describe("an agent asking", () => {
   test("is refused while its question is still open", () => {
     const { task } = play(triageRunning().task, [ask(planner)]);
 
-    expect(next(task, ask(planner, "And deleted ones?"))).toEqual({
+    expect(peek(task, ask(planner, "And deleted ones?"))).toEqual({
       ok: false,
       rejection: { input: "ask", reason: "#142 already has an open question." },
     });
@@ -44,7 +44,7 @@ describe("an agent asking", () => {
       options: ["Yes"],
     };
 
-    expect(next(triageRunning().task, oneOption)).toEqual({
+    expect(peek(triageRunning().task, oneOption)).toEqual({
       ok: false,
       rejection: { input: "ask", reason: "A question needs two to four options." },
     });
@@ -53,7 +53,7 @@ describe("an agent asking", () => {
   test("is only heard from the task's current agent", () => {
     const stranger = SessionId.parse("session-stranger");
 
-    expect(next(triageRunning().task, ask(stranger))).toEqual({
+    expect(peek(triageRunning().task, ask(stranger))).toEqual({
       ok: false,
       rejection: { input: "ask", reason: "#142's agent isn't session-stranger." },
     });
@@ -84,7 +84,7 @@ describe("your reply", () => {
   });
 
   test("is refused when there is no open question", () => {
-    expect(next(triageRunning().task, reply())).toEqual({
+    expect(peek(triageRunning().task, reply())).toEqual({
       ok: false,
       rejection: { input: "reply", reason: "#142 has no open question." },
     });
@@ -93,7 +93,7 @@ describe("your reply", () => {
   test("is refused when an answer already waits", () => {
     const { task } = play(triageRunning().task, [ask(planner), reply("No")]);
 
-    expect(next(task, reply("Yes"))).toEqual({
+    expect(peek(task, reply("Yes"))).toEqual({
       ok: false,
       rejection: {
         input: "reply",
@@ -105,7 +105,7 @@ describe("your reply", () => {
   test("is refused when blank", () => {
     const { task } = play(triageRunning().task, [ask(planner)]);
 
-    expect(next(task, reply("  "))).toEqual({
+    expect(peek(task, reply("  "))).toEqual({
       ok: false,
       rejection: { input: "reply", reason: "A reply needs text." },
     });

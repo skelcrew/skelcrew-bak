@@ -9,7 +9,7 @@ import {
   id,
   kill,
   mainMerged,
-  next,
+  peek,
   planner,
   play,
   run,
@@ -24,17 +24,17 @@ describe("a late reply", () => {
   test("for a workspace the task no longer waits on is removed", () => {
     const { task } = run(add(), start, kill);
 
-    expect(next(task, workspaceCreated(1))).toEqual({
+    expect(peek(task, workspaceCreated(1))).toEqual({
       ok: true,
       events: [],
       commands: [{ type: "remove_workspace", path: workspace.path, deleteBranch: false }],
     });
   });
 
-  test("for a session the task no longer waits on is stopped", () => {
+  test("for a session the task no longer waits on is stopped, saving any work it did", () => {
     const { task } = run(add(), start, workspaceCreated(1), kill);
 
-    expect(next(task, sessionStarted(2, planner))).toEqual({
+    expect(peek(task, sessionStarted(2, planner))).toEqual({
       ok: true,
       events: [],
       commands: [
@@ -43,7 +43,7 @@ describe("a late reply", () => {
           taskId: id,
           request: null,
           session: planner,
-          save: false,
+          save: true,
           remove: null,
         },
       ],
@@ -58,7 +58,7 @@ describe("a late reply", () => {
       kill,
     ]);
 
-    expect(next(task, copyCreated(7))).toEqual({
+    expect(peek(task, copyCreated(7))).toEqual({
       ok: true,
       events: [],
       commands: [{ type: "remove_workspace", path: copy.path, deleteBranch: false }],
@@ -70,12 +70,12 @@ describe("a repeated reply", () => {
   test("for the session the task already runs is ignored", () => {
     const { task } = buildRunning();
 
-    expect(next(task, sessionStarted(4, builder))).toEqual({ ok: true, events: [], commands: [] });
+    expect(peek(task, sessionStarted(4, builder))).toEqual({ ok: true, events: [], commands: [] });
   });
 
   test("for the workspace the task already holds is ignored", () => {
     const { task } = buildRunning();
 
-    expect(next(task, workspaceCreated(1))).toEqual({ ok: true, events: [], commands: [] });
+    expect(peek(task, workspaceCreated(1))).toEqual({ ok: true, events: [], commands: [] });
   });
 });

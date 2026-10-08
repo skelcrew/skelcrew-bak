@@ -9,6 +9,7 @@
 // It limits only what Skelcrew starts on its own. Your `skel start` can go
 // past max_running, so this may find no slot free at all.
 
+import { waitingForSlot } from "./task";
 import type { Schedule, Task } from "./types";
 
 export const schedule: Schedule = (tasks, config, inFlight) => {
@@ -35,7 +36,9 @@ export function slotsInUse(tasks: readonly Task[], inFlight: number): number {
 }
 
 // A task holds a slot while an agent works on it, or is being started or
-// stopped for it, or while a step between agents is under way. A stopping
+// stopped for it, or while main merges or a spec is committed between two
+// agents, since the next agent starts straight after. Delivery doesn't hold
+// one: nothing starts after it. A stopping
 // agent holds its slot until the stop is confirmed, even once its task is
 // held or has ended. A task held, waiting for your answer or your sign-off,
 // or queued holds none. An attached task keeps its slot, since its agent
@@ -60,23 +63,6 @@ function holdsSlot(task: Task): boolean {
     default:
       return false;
   }
-}
-
-// Waiting in line: queued, or holding a step a failure answered, which the
-// next start sends again. Not held, and with no agent still stopping, since
-// the next agent on a task starts only once the last one's stop is confirmed.
-function waitingForSlot(task: Task): boolean {
-  if (task.phase === "ended" || task.hold !== null || task.stopping !== null) return false;
-  const { step } = task;
-  if (step.kind === "queued") return true;
-  if (
-    step.kind === "committing_spec" ||
-    step.kind === "merging_main" ||
-    step.kind === "delivering"
-  ) {
-    return step.request === null;
-  }
-  return false;
 }
 
 function laneOrder(task: Task): number {

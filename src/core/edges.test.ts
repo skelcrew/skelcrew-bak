@@ -22,9 +22,9 @@ import {
   kill,
   mainFailed,
   mainMerged,
-  next,
   pass,
   pause,
+  peek,
   planner,
   play,
   retry,
@@ -119,7 +119,7 @@ describe("rule 15: work is saved before it is let go", () => {
   test("a repeated start reply for an agent being stopped is ignored", () => {
     const stopping = play(buildRunning().task, [done()]).task;
 
-    expect(next(stopping, sessionStarted(4, builder))).toEqual({
+    expect(peek(stopping, sessionStarted(4, builder))).toEqual({
       ok: true,
       events: [],
       commands: [],
@@ -131,7 +131,7 @@ describe("waiting while an agent stops", () => {
   test("pause waits until the stop is confirmed", () => {
     const stopping = play(buildRunning().task, [done()]).task;
 
-    expect(next(stopping, pause)).toEqual({
+    expect(peek(stopping, pause)).toEqual({
       ok: false,
       rejection: {
         input: "pause",
@@ -149,11 +149,11 @@ describe("approval on a held task", () => {
       pause,
     ]).task;
 
-    expect(next(awaiting, approve)).toEqual({
+    expect(peek(awaiting, approve)).toEqual({
       ok: false,
       rejection: { input: "approve", reason: "#142 is held. Resume it first." },
     });
-    expect(next(awaiting, set({ approve: false })).ok).toBe(false);
+    expect(peek(awaiting, set({ approve: false })).ok).toBe(false);
   });
 });
 
@@ -183,7 +183,7 @@ describe("rule 5: a late reply changes nothing", () => {
   test("is accepted with nothing to do, not refused", () => {
     const failed = play(buildRunning().task, [done(), stopped(5, builder, "saved"), mainFailed(6)]);
 
-    expect(next(failed.task, mainMerged(6))).toEqual({ ok: true, events: [], commands: [] });
+    expect(peek(failed.task, mainMerged(6))).toEqual({ ok: true, events: [], commands: [] });
   });
 });
 

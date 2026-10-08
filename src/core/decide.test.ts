@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { add, id, next, run, start, types } from "./testing";
+import { add, id, peek, run, start, types } from "./testing";
 
 describe("adding a task", () => {
   test("waits in triage's queue", () => {
@@ -35,7 +35,7 @@ describe("adding a task", () => {
   });
 
   test("is refused for a blank title", () => {
-    expect(next(null, add("  "))).toEqual({
+    expect(peek(null, add("  "))).toEqual({
       ok: false,
       rejection: { input: "add", reason: "A task needs a title." },
     });
@@ -44,7 +44,7 @@ describe("adding a task", () => {
   test("is refused when the task already exists", () => {
     const { task } = run(add());
 
-    expect(next(task, add("Again"))).toEqual({
+    expect(peek(task, add("Again"))).toEqual({
       ok: false,
       rejection: { input: "add", reason: "#142 already exists." },
     });
@@ -67,14 +67,14 @@ describe("starting triage", () => {
   test("is refused when the task isn't waiting for a slot", () => {
     const { task } = run(add(), start);
 
-    expect(next(task, start)).toEqual({
+    expect(peek(task, start)).toEqual({
       ok: false,
       rejection: { input: "start", reason: "#142 isn't waiting for a slot." },
     });
   });
 
   test("is refused for a task that doesn't exist", () => {
-    expect(next(null, start)).toEqual({
+    expect(peek(null, start)).toEqual({
       ok: false,
       rejection: { input: "start", reason: "#142 doesn't exist." },
     });

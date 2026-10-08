@@ -287,7 +287,11 @@ the sections above don't make. The code and its tests follow them.
   Setting approval on a task whose delivery failed makes it wait for your sign-off first.
 - **Approving, or clearing approval, waits until a held task is resumed.**
 - **A start carries on from where the task waits.** A build that was handed over merges or
-  goes to review instead of building again. A review whose tester crashed reuses its copy.
+  goes to review instead of building again. A review whose tester crashed, gave up or was
+  paused reuses its copy, which stays until the task leaves review.
+- **Resuming puts a task at the front of the line once.** Once it starts, it waits in line
+  like any other task.
+- **`skel set` with nothing to change is refused.**
 
 **Holds and failures**
 
@@ -304,6 +308,8 @@ the sections above don't make. The code and its tests follow them.
 - **A workspace holding unsaved work is never removed**, not even by kill, until a later
   save succeeds. The task records it.
 - **A stop takes the question of the agent it stops**, so no question outlives its agent.
+- **A stop's reply must name the session being stopped**, or it changes nothing. A reply
+  saying a save failed, for a stop that didn't save, means there was nothing to save.
 
 **Workspaces and stops**
 
@@ -319,6 +325,14 @@ the sections above don't make. The code and its tests follow them.
 - **An ended task keeps what was handed over** and the tester's evidence, for the record.
 - **The scheduler skips a task while its last agent is stopping**, and that task keeps its
   slot until the stop is confirmed, even once held or ended.
+- **Merging main and committing a spec hold a slot; delivery doesn't.** No agent runs in
+  any of them, but the next agent starts straight after a merge or a spec commit, without
+  asking the scheduler again. Holding the slot is what keeps that within `max_running`.
+  Nothing starts after a delivery. A review suggested dropping the slot for all three, to
+  remove the "a failure answers its request" machinery. That would let a retried merge
+  start a tester past `max_running`, so it wasn't taken.
+- **Killing a task while a session is starting keeps its workspace**, and the late
+  session's stop saves any work it did. Every late session's stop saves.
 
 **Events**
 

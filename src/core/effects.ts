@@ -106,23 +106,36 @@ export function startBuilder(
 }
 
 // Stops whichever agent is working, if any. A builder that can edit has its
-// work saved. A tester's copy is removed with it. `remove` is the workspace
-// to remove too, for a planner or builder.
+// work saved. `removes` says what goes with the stop once the work is safe:
+// the workspace of a planner or builder, never one holding unsaved work, and
+// a tester's copy. A pause removes nothing, so the agent can come back.
 export function stopRunning(
   task: Task,
   request: number,
-  remove: { path: string; deleteBranch: boolean } | null,
+  removes: { workspace: boolean; copy: boolean },
 ): Effects {
   const session = runningSession(task);
-  if (session === null) return { events: [], commands: [] };
-  if (task.phase === "review") return stopTester(task, session, request);
+  if (session === null || task.phase === "ended") return { events: [], commands: [] };
+  if (task.phase === "review") return stopTester(task, session, request, removes.copy);
   const save = task.phase === "build" && task.plan.intent !== "answer";
+  const { workspace } = task;
+  const remove =
+    removes.workspace && workspace !== null && !task.unsaved
+      ? { path: workspace.path, deleteBranch: false }
+      : null;
   return stopAgent(task, session, request, save, remove);
 }
 
-// Stops the tester and removes its copy. It never edits, so nothing is saved.
-export function stopTester(task: TaskIn<"review">, session: SessionId, request: number): Effects {
-  const remove = task.copy === null ? null : { path: task.copy.path, deleteBranch: false };
+// Stops the tester. It never edits, so nothing is saved. Its copy goes with
+// it when the task leaves review, and stays for a resumed review otherwise.
+export function stopTester(
+  task: TaskIn<"review">,
+  session: SessionId,
+  request: number,
+  removeCopy: boolean,
+): Effects {
+  const remove =
+    removeCopy && task.copy !== null ? { path: task.copy.path, deleteBranch: false } : null;
   return stopAgent(task, session, request, false, remove);
 }
 

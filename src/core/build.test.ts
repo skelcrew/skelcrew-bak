@@ -12,7 +12,7 @@ import {
   mainConflict,
   mainFailed,
   mainMerged,
-  next,
+  peek,
   play,
   reply,
   reviewed,
@@ -84,7 +84,7 @@ describe("the builder handing over", () => {
   test("is refused while the builder's own question is open", () => {
     const { task } = play(buildRunning().task, [ask(builder), reply()]);
 
-    expect(next(task, done())).toEqual({
+    expect(peek(task, done())).toEqual({
       ok: false,
       rejection: { input: "done", reason: "#142 has an open question. Wait for the answer." },
     });
@@ -92,7 +92,7 @@ describe("the builder handing over", () => {
 
   test("is refused when the branch changed nothing", () => {
     expect(
-      next(buildRunning().task, done("Nothing.", { head: branch.head, changedFiles: [] })),
+      peek(buildRunning().task, done("Nothing.", { head: branch.head, changedFiles: [] })),
     ).toEqual({
       ok: false,
       rejection: { input: "done", reason: "The branch has no changes." },
@@ -100,7 +100,7 @@ describe("the builder handing over", () => {
   });
 
   test("with a report is refused for a ship task", () => {
-    expect(next(buildRunning().task, doneAnswer())).toEqual({
+    expect(peek(buildRunning().task, doneAnswer())).toEqual({
       ok: false,
       rejection: {
         input: "done_answer",
@@ -154,7 +154,7 @@ describe("merging main", () => {
 
     expect(task.hold).toEqual({ kind: "failed", step: "merge_main", message: "index.lock exists" });
     expect(task.phase === "build" && task.step).toEqual({ kind: "merging_main", request: null });
-    expect(next(task, mainMerged(6))).toEqual({ ok: true, events: [], commands: [] });
+    expect(peek(task, mainMerged(6))).toEqual({ ok: true, events: [], commands: [] });
   });
 });
 
@@ -175,7 +175,7 @@ describe("an answer handing over", () => {
   });
 
   test("with a summary is refused", () => {
-    expect(next(answering(), done())).toEqual({
+    expect(peek(answering(), done())).toEqual({
       ok: false,
       rejection: { input: "done", reason: "#142 is an answer task. Hand it over with a report." },
     });

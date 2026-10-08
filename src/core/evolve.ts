@@ -339,7 +339,7 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
         handover: null,
       });
   }
-  return finishing(task, event) ?? refuse(event, `#${task.id} is in build`);
+  return signOffAndDelivery(task, event) ?? refuse(event, `#${task.id} is in build`);
 }
 
 function inReview(task: TaskIn<"review">, event: TaskEvent): Evolved {
@@ -371,12 +371,12 @@ function inReview(task: TaskIn<"review">, event: TaskEvent): Evolved {
         backToBuild(task, { kind: "awaiting_stop" }, { kind: "findings", text: event.findings }, 1),
       );
   }
-  return finishing(task, event) ?? refuse(event, `#${task.id} is in review`);
+  return signOffAndDelivery(task, event) ?? refuse(event, `#${task.id} is in review`);
 }
 
 // Approval and delivery, the same in whichever phase ran last. Null for any
 // other event.
-function finishing(task: TaskIn<"build" | "review">, event: TaskEvent): Evolved | null {
+function signOffAndDelivery(task: TaskIn<"build" | "review">, event: TaskEvent): Evolved | null {
   switch (event.type) {
     case "approval.requested":
       return ok({ ...task, step: { kind: "awaiting_approval" } });
@@ -576,14 +576,16 @@ function withAgent(kind: string): boolean {
 // ---------------------------------------------------------------------------
 
 // A step that sends a request records the number the event gives it, so only
-// the reply that brings it back can answer. The counter follows it. Typing the
-// step as T["step"] makes the compiler check it fits the task's phase.
+// the reply that brings it back can answer. The counter follows it. The task
+// is under way, so a resumed task's place at the front of the line is used
+// up. Typing the step as T["step"] makes the compiler check it fits the
+// task's phase.
 function withRequest<T extends Extract<Task, { step: unknown }>>(
   task: T,
   request: number,
   step: T["step"],
 ): T {
-  return { ...task, step, requests: Math.max(task.requests, request) };
+  return { ...task, step, lane: "queued", requests: Math.max(task.requests, request) };
 }
 
 function ok(task: Task): Evolved {

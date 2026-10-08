@@ -15,8 +15,8 @@ import {
   done,
   id,
   mainMerged,
-  next,
   pass,
+  peek,
   play,
   reviewed,
   reviewRunning,
@@ -150,7 +150,7 @@ describe("your sign-off", () => {
   });
 
   test("is refused when nothing waits for it", () => {
-    expect(next(reviewRunning().task, approve)).toEqual({
+    expect(peek(reviewRunning().task, approve)).toEqual({
       ok: false,
       rejection: { input: "approve", reason: "#142 isn't waiting for your sign-off." },
     });
@@ -182,7 +182,7 @@ describe("delivery", () => {
 
     expect(task.hold).toEqual({ kind: "failed", step: "delivery", message: "push rejected" });
     expect(task.phase === "review" && task.step).toEqual({ kind: "delivering", request: null });
-    expect(next(task, delivered(10))).toEqual({ ok: true, events: [], commands: [] });
+    expect(peek(task, delivered(10))).toEqual({ ok: true, events: [], commands: [] });
   });
 
   test("of an answer keeps the tasks it proposes, waiting for you", () => {

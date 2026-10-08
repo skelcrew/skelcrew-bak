@@ -5,8 +5,8 @@ import {
   branch,
   builder,
   buildRunning,
-  next,
   pass,
+  peek,
   planner,
   play,
   proceed,
@@ -57,7 +57,7 @@ describe("setting during triage", () => {
   });
 
   test("waits while a step is under way", () => {
-    expect(next(run(add(), start).task, set({ rigor: "full" }))).toEqual({
+    expect(peek(run(add(), start).task, set({ rigor: "full" }))).toEqual({
       ok: false,
       rejection: {
         input: "set",
@@ -115,7 +115,7 @@ describe("attaching", () => {
   });
 
   test("is refused when no agent is working", () => {
-    expect(next(run(add()).task, attach)).toEqual({
+    expect(peek(run(add()).task, attach)).toEqual({
       ok: false,
       rejection: { input: "attach", reason: "#142 has no agent running." },
     });
@@ -140,7 +140,7 @@ describe("attaching", () => {
   test("handing over is only for a builder's work", () => {
     const detach: Input = { by: "you", type: "detach", choice: "hand_over", branch };
 
-    expect(next(play(triageRunning().task, [attach]).task, detach)).toEqual({
+    expect(peek(play(triageRunning().task, [attach]).task, detach)).toEqual({
       ok: false,
       rejection: { input: "detach", reason: "Only a builder's work can be handed over." },
     });
@@ -173,7 +173,7 @@ describe("deciding on proposals", () => {
     const decide: Input = { by: "you", type: "decide_proposals", approved: [0], denied: [] };
     const { task } = play(triageRunning().task, [split, decide]);
 
-    expect(next(task, decide)).toEqual({
+    expect(peek(task, decide)).toEqual({
       ok: false,
       rejection: { input: "decide_proposals", reason: "Proposal 0 of #142 isn't waiting for you." },
     });

@@ -19,3 +19,33 @@ export function waitingForSession(task: Task, request: number): boolean {
   if (task.phase === "ended") return false;
   return task.step.kind === "starting" && task.step.request === request;
 }
+
+// Whether the task holds this workspace or tester's copy.
+export function holdsWorkspace(task: Task, path: string): boolean {
+  switch (task.phase) {
+    case "ended":
+      return task.kept?.path === path;
+    case "review":
+      return task.workspace.path === path || task.copy?.path === path;
+    default:
+      return task.workspace?.path === path;
+  }
+}
+
+// Whether the task waits in line for a slot: queued, or holding a step a
+// failure answered, which the next start sends again. Not held, and with no
+// agent still stopping, since the next agent on a task starts only once the
+// last one's stop is confirmed.
+export function waitingForSlot(task: Task): boolean {
+  if (task.phase === "ended" || task.hold !== null || task.stopping !== null) return false;
+  const { step } = task;
+  if (step.kind === "queued") return true;
+  if (
+    step.kind === "committing_spec" ||
+    step.kind === "merging_main" ||
+    step.kind === "delivering"
+  ) {
+    return step.request === null;
+  }
+  return false;
+}

@@ -22,7 +22,13 @@ import {
   stopRunning,
   stopTester,
 } from "./effects";
-import { runningSession, type TaskIn, waitingForSession } from "./task";
+import {
+  holdsWorkspace,
+  runningSession,
+  type TaskIn,
+  waitingForSession,
+  waitingForSlot,
+} from "./task";
 import type {
   Command,
   Config,
@@ -132,7 +138,7 @@ function lateReply(task: Task, input: Input, ctx: Context): Decision | null {
   if (input.type === "workspace_created" || input.type === "copy_created") {
     if (waitingForWorkspace(task, input.request)) return null;
     const path = input.type === "workspace_created" ? input.workspace.path : input.copy.path;
-    if (holds(task, path)) return ctx.accept([]);
+    if (holdsWorkspace(task, path)) return ctx.accept([]);
     return ctx.accept([], [{ type: "remove_workspace", path, deleteBranch: false }]);
   }
   if (input.type === "session_started") {
@@ -147,7 +153,7 @@ function lateReply(task: Task, input: Input, ctx: Context): Decision | null {
           taskId: task.id,
           request: null,
           session: input.session,
-          save: false,
+          save: true,
           remove: null,
         },
       ],
@@ -178,23 +184,11 @@ function awaits(task: Task, input: Reply): boolean {
     case "session_ended":
       return runningSession(task) === input.session || waitingForSession(task, input.request);
     case "stopped":
-      return task.stopping?.request === input.request;
+      return task.stopping?.request === input.request && task.stopping.session === input.session;
     default:
       return (
         task.phase !== "ended" && "request" in task.step && task.step.request === input.request
       );
-  }
-}
-
-// Whether the task holds this workspace or tester's copy.
-function holds(task: Task, path: string): boolean {
-  switch (task.phase) {
-    case "ended":
-      return task.kept?.path === path;
-    case "review":
-      return task.workspace.path === path || task.copy?.path === path;
-    default:
-      return task.workspace?.path === path;
   }
 }
 
@@ -278,7 +272,8 @@ function lifecycle(
       if (task.hold !== null) return ctx.reject(`#${task.id} is held.`);
       if (!waitingForSlot(task)) return ctx.reject(`#${task.id} isn't waiting for a slot.`);
       // Two agents never work on a task at once, so the last one's stop is
-      // confirmed first. The CLI waits and sends the start again.
+      // confirmed first. The scheduler skips such a task, and your start_now
+      // waits: the CLI sends it again.
       if (task.stopping !== null) {
         return ctx.reject(
           `#${task.id} is still stopping its last agent. Start waits until it has.`,
@@ -298,7 +293,7 @@ function lifecycle(
       if (settling(task)) {
         return ctx.reject(`#${task.id} is busy with a step. skel pause waits until it settles.`);
       }
-      const stop = stopRunning(task, next(task), null);
+      const stop = stopRunning(task, next(task), { workspace: false, copy: false });
       return ctx.accept([held({ kind: "paused" }), ...stop.events], stop.commands);
     }
 
@@ -327,18 +322,19 @@ function lifecycle(
     // it holds the work.
     case "kill": {
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
-      // A workspace holding work that couldn't be saved is never removed.
-      const workspace = task.unsaved ? null : task.workspace;
-      const remove = workspace === null ? null : { path: workspace.path, deleteBranch: false };
-      const stop = stopRunning(task, next(task), remove);
+      const stop = stopRunning(task, next(task), { workspace: true, copy: true });
       const events: EventBody[] = [{ type: "task.killed" }, ...stop.events];
       const commands = [...stop.commands];
-      // A planner's or builder's stop removes the workspace once its work is
-      // saved. A tester's stop only removes its copy, and a stop already on
-      // its way removes the workspace when it is confirmed (see afterStop).
-      // Otherwise nothing is working in it, so it goes now.
+      // The workspace goes now only if nothing could still write to it: no
+      // agent at work, stopping or starting in it, and no unsaved work. A
+      // planner's or builder's stop removes it once its work is saved, and a
+      // stop already on its way removes it when confirmed (see afterStop).
+      // While a session is starting, it stays, for the late session's stop
+      // to save into.
+      const workspace = task.unsaved ? null : task.workspace;
       const goesWithStop = stop.events.length > 0 && task.phase !== "review";
-      if (workspace !== null && !goesWithStop && task.stopping === null) {
+      const starting = task.step.kind === "starting";
+      if (workspace !== null && !goesWithStop && task.stopping === null && !starting) {
         events.push({ type: "workspace.removed", path: workspace.path });
         commands.push({ type: "remove_workspace", path: workspace.path, deleteBranch: false });
       }
@@ -361,6 +357,9 @@ function yourCalls(
   switch (input.type) {
     // Overrules the planner's call. See setPlan.
     case "set":
+      if (input.intent === null && input.rigor === null && input.approve === null) {
+        return ctx.reject("Set intent, rigor or approval.");
+      }
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (settling(task)) {
         return ctx.reject(`#${task.id} is busy with a step. skel set waits until it settles.`);
@@ -465,7 +464,7 @@ function conversation(
 
     // The agent can't go on. It is stopped, and the task waits for you.
     case "give_up": {
-      const stop = stopRunning(task, next(task), null);
+      const stop = stopRunning(task, next(task), { workspace: false, copy: false });
       return ctx.accept(
         [held({ kind: "gave_up", message: input.message }), ...stop.events],
         stop.commands,
@@ -528,14 +527,13 @@ function replies(
       if (stopping === null || stopping.request !== input.request) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
-      const confirmed: EventBody = {
-        type: "session.stopped",
-        session: stopping.session,
-        saved: input.saved,
-      };
+      // Only a stop that saves can fail to save. Anything else found nothing.
+      const saved =
+        stopping.saves || input.saved !== "save_failed" ? input.saved : "nothing_to_save";
+      const confirmed: EventBody = { type: "session.stopped", session: stopping.session, saved };
       // A task already held keeps its hold. session.stopped records the
       // failed save, and the work stays in the workspace either way.
-      if (input.saved === "save_failed" && task.phase !== "ended" && task.hold === null) {
+      if (saved === "save_failed" && task.phase !== "ended" && task.hold === null) {
         return ctx.accept([
           confirmed,
           held({ kind: "failed", step: "save", message: input.message }),
@@ -543,7 +541,7 @@ function replies(
       }
       // The workspace holds unsaved work if this stop's save failed, or if
       // an earlier one did and this stop didn't save.
-      const unsaved = stopping.saves ? input.saved === "save_failed" : task.unsaved;
+      const unsaved = stopping.saves ? saved === "save_failed" : task.unsaved;
       const after = afterStop(task, stopping.removes, unsaved);
       return ctx.accept([confirmed, ...after.events], after.commands);
     }
@@ -807,7 +805,7 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
       }
       // A `try` skips review, so it finishes now.
       if (task.plan.intent === "try" && task.handover !== null) {
-        const finish = finishing(
+        const after = afterVerdict(
           task,
           task.plan,
           input.reviewed,
@@ -817,8 +815,8 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
           ctx.config,
         );
         return ctx.accept(
-          [{ type: "main.merged", reviewed: input.reviewed }, ...finish.events],
-          finish.commands,
+          [{ type: "main.merged", reviewed: input.reviewed }, ...after.events],
+          after.commands,
         );
       }
       const copy = startCopy(task, input.reviewed, next(task));
@@ -852,7 +850,9 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
       return ctx.accept([held({ kind: "failed", step: "merge_main", message: input.message })]);
 
     default:
-      return finish(task, input, ctx, task.handover, null) ?? wrongPhase(task, input, ctx);
+      return (
+        signOffAndDelivery(task, input, ctx, task.handover, null) ?? wrongPhase(task, input, ctx)
+      );
   }
 }
 
@@ -886,13 +886,13 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
       if (task.question !== null) {
         return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
       }
-      const stop = stopTester(task, input.session, next(task));
+      const stop = stopTester(task, input.session, next(task), true);
       const passed: EventBody = {
         type: "review.passed",
         commit: task.reviewed.head,
         evidence: input.evidence,
       };
-      const finish = finishing(
+      const after = afterVerdict(
         task,
         task.plan,
         task.reviewed,
@@ -902,8 +902,8 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
         ctx.config,
       );
       return ctx.accept(
-        [passed, ...stop.events, ...finish.events],
-        [...stop.commands, ...finish.commands],
+        [passed, ...stop.events, ...after.events],
+        [...stop.commands, ...after.commands],
       );
     }
 
@@ -914,7 +914,7 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
       if (task.question !== null) {
         return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
       }
-      const stop = stopTester(task, input.session, next(task));
+      const stop = stopTester(task, input.session, next(task), true);
       const asked: EventBody = { type: "review.changes_requested", findings: input.findings };
       if (task.loops + 1 >= ctx.config.loopCap) {
         return ctx.accept(
@@ -926,7 +926,10 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
     }
 
     default:
-      return finish(task, input, ctx, task.handover, task.evidence) ?? wrongPhase(task, input, ctx);
+      return (
+        signOffAndDelivery(task, input, ctx, task.handover, task.evidence) ??
+        wrongPhase(task, input, ctx)
+      );
   }
 }
 
@@ -994,7 +997,7 @@ function setPlan(
     return ctx.accept([fields, { type: "approval.requested", criticalFiles: critical }]);
   }
 
-  const approvalLifted = step.kind === "awaiting_approval" && !plan.approve;
+  const approvalLifted = step.kind === "awaiting_approval" && task.plan.approve && !plan.approve;
   if (approvalLifted && task.hold !== null) {
     return ctx.reject(`#${task.id} is held. Resume it first.`);
   }
@@ -1016,7 +1019,7 @@ function restartBuild(
   before: EventBody[],
   ctx: Context,
 ): Decision {
-  const stop = stopRunning(task, next(task), null);
+  const stop = stopRunning(task, next(task), { workspace: false, copy: true });
   const waitForStop = stop.events.length > 0 || task.stopping !== null;
   // Leaving review drops the tester's copy. A working tester's stop removes
   // it. Otherwise it goes now.
@@ -1038,7 +1041,7 @@ function restartBuild(
 
 // After review passes, or a `try` merges: your sign-off first when the task
 // is flagged or touches a critical path, otherwise delivery.
-function finishing(
+function afterVerdict(
   task: Task,
   plan: Plan,
   reviewed: Reviewed,
@@ -1056,7 +1059,7 @@ function finishing(
 
 // Your sign-off, and delivery's replies, in either phase that can finish.
 // Null for any other input.
-function finish(
+function signOffAndDelivery(
   task: TaskIn<"build" | "review">,
   input: Input,
   ctx: Context,
@@ -1083,6 +1086,7 @@ function finish(
       if (step.kind !== "awaiting_approval") {
         return ctx.reject(`#${task.id} isn't waiting for your sign-off.`);
       }
+      if (task.hold !== null) return ctx.reject(`#${task.id} is held. Resume it first.`);
       if (isBlank(input.note)) return ctx.reject("A denial needs a note.");
       return ctx.accept([{ type: "approval.denied", note: input.note }]);
 
@@ -1144,21 +1148,6 @@ function wrongPhase(task: Task, input: Input, ctx: Context): Decision {
 
 function held(hold: Hold): EventBody {
   return { type: "task.held", hold };
-}
-
-// Whether the task waits in line for a slot: queued, or holding a step a
-// failure answered, which the next start sends again.
-function waitingForSlot(task: Exclude<Task, { phase: "ended" }>): boolean {
-  const { step } = task;
-  if (step.kind === "queued") return true;
-  if (
-    step.kind === "committing_spec" ||
-    step.kind === "merging_main" ||
-    step.kind === "delivering"
-  ) {
-    return step.request === null;
-  }
-  return false;
 }
 
 // Why a delivery doesn't match what was reviewed, or null if it does. It

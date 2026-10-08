@@ -12,6 +12,7 @@ import {
   approve,
   branch,
   builder,
+  changes,
   config,
   copyCreated,
   delivered,
@@ -20,8 +21,10 @@ import {
   id,
   mainMerged,
   pass,
+  pause,
   planner,
   proceed,
+  resume,
   retry,
   sessionEnded,
   sessionStarted,
@@ -128,6 +131,38 @@ describe("golden stories", () => {
         stopped(3, builder, "saved"),
         mainMerged(4),
         delivered(5),
+      ),
+    ).toMatchSnapshot();
+  });
+
+  test("review asks for changes, the second builder is paused and resumed, then it ships", () => {
+    expect(
+      story(
+        addPlanned("ship", "light"),
+        start,
+        workspaceCreated(1),
+        sessionStarted(2, builder),
+        done(),
+        stopped(3, builder, "saved"),
+        mainMerged(4),
+        copyCreated(5),
+        sessionStarted(6, tester),
+        changes("The header row is missing a column."),
+        stopped(7, tester),
+        sessionStarted(8, builder),
+        pause,
+        stopped(9, builder, "saved"),
+        resume,
+        start,
+        sessionStarted(10, builder),
+        done(),
+        stopped(11, builder, "saved"),
+        mainMerged(12),
+        copyCreated(13),
+        sessionStarted(14, tester),
+        pass(),
+        stopped(15, tester),
+        delivered(16),
       ),
     ).toMatchSnapshot();
   });
