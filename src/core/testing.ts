@@ -122,3 +122,15 @@ export const sessionEnded = (
 export function triageRunning(): Run {
   return run(add(), start, workspaceCreated(1), sessionStarted(2, planner));
 }
+
+export const ask = (session: SessionId, text = "Include archived rows?"): Input => ({
+  by: "agent",
+  session,
+  type: "ask",
+  text,
+  options: ["Yes", "No"],
+});
+
+export const reply = (text = "No"): Input => ({ by: "you", type: "reply", text });
+
+export const deliverAnswer: Input = { by: "daemon", type: "deliver_answer" };

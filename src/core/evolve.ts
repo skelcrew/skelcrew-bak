@@ -59,6 +59,19 @@ export const evolve: Evolve = (task, event) => {
       if (rested === null) return refuse(event, `#${task.id} has ended`);
       return ok({ ...rested, hold: event.hold, question: null, keptAnswer: null });
     }
+
+    case "question.asked":
+      if (task.question !== null) return refuse(event, `#${task.id} already has an open question`);
+      return ok({ ...task, question: event.question });
+
+    // The question stays open until the answer reaches the agent.
+    case "answer.kept":
+      if (task.question === null) return refuse(event, `#${task.id} has no open question`);
+      return ok({ ...task, keptAnswer: { text: event.text, keptAt: event.at } });
+
+    case "question.answered":
+      if (task.question === null) return refuse(event, `#${task.id} has no open question`);
+      return ok({ ...task, question: null, keptAnswer: null });
   }
 
   switch (task.phase) {

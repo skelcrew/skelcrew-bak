@@ -16,12 +16,14 @@ import type {
   Plan,
   SessionContext,
   Task,
+  Timestamp,
 } from "./types";
 
 // What every step needs besides the task and the input.
 type Context = {
   accept: (bodies: EventBody[], commands?: Command[]) => Decision;
   reject: (reason: string) => Decision;
+  at: Timestamp;
 };
 
 export const decide: Decide = (task, envelope) => {
@@ -30,6 +32,10 @@ export const decide: Decide = (task, envelope) => {
 
   if (input.type === "add") return create(task, input, ctx);
   if (task === null) return ctx.reject(`#${envelope.taskId} doesn't exist.`);
+
+  const mismatch = senderMismatch(task, input);
+  if (mismatch !== null) return ctx.reject(mismatch);
+
   if (worksInAnyPhase(input)) return inAnyPhase(task, input, ctx);
 
   switch (task.phase) {
@@ -48,6 +54,7 @@ function makeContext({ taskId, at, input }: Envelope): Context {
       commands,
     }),
     reject: (reason) => ({ ok: false, rejection: { input: input.type, reason } }),
+    at,
   };
 }
 
@@ -76,7 +83,7 @@ function create(task: Task | null, input: Input & { type: "add" }, ctx: Context)
 }
 
 // Inputs whose rules don't depend on the phase.
-const anyPhaseInputs = ["session_ended"] as const;
+const anyPhaseInputs = ["session_ended", "ask", "reply", "deliver_answer"] as const;
 type AnyPhaseInput = Extract<Input, { type: (typeof anyPhaseInputs)[number] }>;
 
 function worksInAnyPhase(input: Input): input is AnyPhaseInput {
@@ -101,6 +108,45 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
           hold: { kind: "crashed", exitCode: input.exitCode, lastLine: input.lastLine },
         },
       ]);
+    }
+
+    // One open question per task, so you are never flooded by one task.
+    // Options make an answer one tap.
+    case "ask": {
+      if (task.question !== null) return ctx.reject(`#${task.id} already has an open question.`);
+      if (input.options.length < 2 || input.options.length > 4) {
+        return ctx.reject("A question needs two to four options.");
+      }
+      const question = {
+        session: input.session,
+        text: input.text,
+        options: input.options,
+        askedAt: ctx.at,
+      };
+      return ctx.accept([{ type: "question.asked", question }]);
+    }
+
+    // The agent works again as soon as it reads your answer, so the answer
+    // waits on the task until the scheduler finds it a slot.
+    case "reply":
+      if (task.question === null) return ctx.reject(`#${task.id} has no open question.`);
+      if (task.keptAnswer !== null) {
+        return ctx.reject(`#${task.id} is already answered. Your answer waits for a slot.`);
+      }
+      if (isBlank(input.text)) return ctx.reject("A reply needs text.");
+      return ctx.accept([{ type: "answer.kept", text: input.text }]);
+
+    // The scheduler found a slot: the kept answer is typed into the session
+    // of the agent that asked.
+    case "deliver_answer": {
+      if (task.keptAnswer === null) return ctx.reject(`#${task.id} has no answer waiting.`);
+      const session = runningSession(task);
+      if (session === null) return ctx.reject(`#${task.id} has no agent running.`);
+      const { text } = task.keptAnswer;
+      return ctx.accept(
+        [{ type: "question.answered", text }],
+        [{ type: "type_into_session", session, text }],
+      );
     }
   }
 }
@@ -183,6 +229,17 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
 // use this number.
 function next(task: Task): number {
   return task.requests + 1;
+}
+
+// A report from an agent that isn't the task's current one: the reason, or
+// null for one that is, and for anything not from an agent. So a builder
+// can't pass its own review, and an old session can't act on new work.
+function senderMismatch(task: Task, input: Input): string | null {
+  if (input.by !== "agent") return null;
+  const current = runningSession(task);
+  if (current === null) return `#${task.id} has no agent running.`;
+  if (current !== input.session) return `#${task.id}'s agent isn't ${input.session}.`;
+  return null;
 }
 
 // What a new session is told, on top of its role's preamble.
