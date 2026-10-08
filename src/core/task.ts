@@ -65,8 +65,8 @@ export function waitingForSlot(task: Task): boolean {
   return false;
 }
 
-// Whether a step is under way that a pause must wait for: something is being
-// made, started, merged or delivered.
+// Whether a step is under way that pause and set must wait for: an agent
+// is stopping, or something is being made, started, merged or delivered.
 export function settling(task: Exclude<Task, { phase: "ended" }>): boolean {
   if (task.stopping !== null) return true;
   switch (task.step.kind) {
