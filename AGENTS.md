@@ -34,6 +34,8 @@ reducer (`decide` and `evolve`), the scheduler, their types, and the invariants.
 - **The core has no side effects.** It never reads the clock, files or the network, and
   never makes up IDs. Time and IDs arrive as inputs, and side effects leave as commands.
   The same inputs must always give the same result.
+- **Every event carries its task and its moment.** Its task ID and time are the ones on the
+  input that caused it.
 - **Strict TypeScript.** No `any`, no `!` to silence a possible null, no `as` casts. The
   tsconfig has `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` on.
 - **Check every outside input** with Zod: plugin input, CLI requests, config and replies
@@ -95,5 +97,7 @@ read, rewrite it.
 ## Layout
 
 - `docs/spec.md`: the design. The source of truth for what Skelcrew does.
+- `docs/core.md`: the core worked out in words: phases, steps, inputs by sender, commands.
+- `docs/invariants.md`: the rules the core must never break. Tests are written against it.
 - `docs/learnings.md`: what v3 taught us, and code worth reusing from it.
 - `CLAUDE.md` links to this file, so every agent reads the same rules.
