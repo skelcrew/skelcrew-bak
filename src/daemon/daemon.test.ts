@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { SessionId, TaskId } from "../core/ids";
@@ -235,6 +235,42 @@ describe("who is calling", () => {
       ok: false,
       message: "Session s-1-2 no longer works on a task.",
     });
+  });
+});
+
+describe("an agent's done", () => {
+  test("is heard with the branch the daemon reads, and the task moves on to review", async () => {
+    const repo = folder();
+    const served = await serve(repo, { socketFolder: join(folder(), "sockets"), tickMs: 10 });
+    if (!served.ok) throw new Error(served.message);
+    running.push(served.daemon);
+    const daemon = served.daemon;
+    const shipLight: Call = {
+      type: "send",
+      task: null,
+      input: {
+        type: "add",
+        title: "Fix the export",
+        description: null,
+        plan: { intent: "ship", rigor: "light", approve: false },
+      },
+    };
+    await send(daemon.socket, shipLight);
+    const row = async () => {
+      const listed = await send(daemon.socket, { type: "ls" });
+      return listed.ok && listed.result.kind === "tasks" ? listed.result.tasks[0] : undefined;
+    };
+    await untilAsync(async () => (await row())?.state === "running");
+
+    // The fake session runner leaves the builder's token where you can find it.
+    const token = readFileSync(join(repo, ".skelcrew", "sessions", "1"), "utf8").trim();
+    const done: Call = { type: "send", task: null, input: { type: "done", summary: "Fixed it." } };
+    expect(await send(daemon.socket, done, token)).toEqual({
+      ok: true,
+      result: { kind: "sent", task: TaskId.parse(1) },
+    });
+    await untilAsync(async () => (await row())?.phase === "review");
+    expect((await row())?.phase).toBe("review");
   });
 });
 

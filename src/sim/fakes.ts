@@ -6,7 +6,7 @@
 // first time, as a real tool must give.
 
 import { CommitSha, SessionId } from "../core/ids";
-import type { Command, Input, TaskId } from "../core/types";
+import type { BranchFacts, Command, Input, TaskId } from "../core/types";
 
 export class FakeTools {
   // Each answer given, by command and request.
@@ -107,6 +107,12 @@ export class FakeTools {
       case "type_into_session":
         return null;
     }
+  }
+
+  // What git would say about a task's branch when its agent is done: a new
+  // commit, with one file changed.
+  branch(): BranchFacts {
+    return { head: this.commit(), changedFiles: ["src/x.ts"] };
   }
 
   // A new commit, never the same as one before. Shared with the simulator's

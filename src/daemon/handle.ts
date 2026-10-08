@@ -2,7 +2,7 @@
 // or reads the tasks for `skel ls`, and says what came of it.
 
 import { TaskId } from "../core/ids";
-import type { AgentInput, Hold, Task, YourInput } from "../core/types";
+import type { AgentInput, BranchFacts, Hold, Task, YourInput } from "../core/types";
 import type { Loop } from "../loop/loop";
 import {
   type Answer,
@@ -18,13 +18,17 @@ import type { Tokens } from "./tokens";
 
 type Handled = { ok: true; result: Result } | { ok: false; message: string };
 
+// What the daemon handles requests with. `branchOf` reads what git says about
+// a task's branch, which the daemon adds to an agent's done.
+export type Context = { loop: Loop; tokens: Tokens; branchOf: (task: Task) => BranchFacts };
+
 // One line in, one line out. A line that can't be read is refused, and the
 // daemon carries on.
-export function answerLine(loop: Loop, tokens: Tokens, line: string): string {
+export function answerLine(context: Context, line: string): string {
   const parsed = parseRequest(line);
   if (!parsed.ok) return refusal(parsed.message);
   const { id, token, call } = parsed.value;
-  const handled = handle(loop, tokens, call, token);
+  const handled = handle(context, call, token);
   const answer: Answer = handled.ok
     ? { v: VERSION, id, ok: true, result: handled.result }
     : { v: VERSION, id, ok: false, message: handled.message };
@@ -35,9 +39,10 @@ export function answerLine(loop: Loop, tokens: Tokens, line: string): string {
 // the session works on. One without comes from you. Which inputs each may
 // send is checked here, and the core refuses anything outside the session's
 // role and phase.
-export function handle(loop: Loop, tokens: Tokens, call: Call, token: string | null): Handled {
+export function handle(context: Context, call: Call, token: string | null): Handled {
+  const loop = context.loop;
   if (call.type === "ls") return { ok: true, result: { kind: "tasks", tasks: rows(loop) } };
-  if (token !== null) return fromAgent(loop, tokens, call.input, token);
+  if (token !== null) return fromAgent(context, call.input, token);
 
   const input = yours(call.input);
   if (input === null) {
@@ -53,7 +58,8 @@ export function handle(loop: Loop, tokens: Tokens, call: Call, token: string | n
   return { ok: true, result: { kind: "sent", task: taskId } };
 }
 
-function fromAgent(loop: Loop, tokens: Tokens, wire: WireInput, token: string): Handled {
+function fromAgent(context: Context, wire: WireInput, token: string): Handled {
+  const { loop, tokens } = context;
   const session = tokens.sessionOf(token);
   if (session === null) {
     return { ok: false, message: "That session token isn't one this daemon gave." };
@@ -62,24 +68,29 @@ function fromAgent(loop: Loop, tokens: Tokens, wire: WireInput, token: string): 
     const message = `Only you can send \`${wire.type}\`, and this call comes from an agent's session.`;
     return { ok: false, message };
   }
-  const input = agents(wire);
-  if (input === null) return { ok: false, message: `\`${wire.type}\` isn't in yet.` };
-
   const task = loop
     .all()
     .find((t) => t.phase !== "ended" && t.step.kind === "running" && t.step.session === session);
   if (task === undefined) {
     return { ok: false, message: `Session ${session} no longer works on a task.` };
   }
+  const input = agents(wire, () => context.branchOf(task));
+  if (input === null) return { ok: false, message: `\`${wire.type}\` is your command.` };
   const decision = loop.send(task.id, { by: "agent", session, ...input });
   if (!decision.ok) return { ok: false, message: decision.rejection.reason };
   return { ok: true, result: { kind: "sent", task: task.id } };
 }
 
 // The input as an agent's, without its session, or null when it is yours.
-// `done` waits for the daemon to read the branch from git, so it isn't in yet.
-function agents(input: WireInput): DistributiveOmit<AgentInput, "session"> | null {
+// A done gets the branch as git sees it, never as the agent says.
+function agents(
+  input: WireInput,
+  branch: () => BranchFacts,
+): DistributiveOmit<AgentInput, "session"> | null {
   switch (input.type) {
+    case "done":
+    case "done_answer":
+      return { ...input, branch: branch() };
     case "triage_proceed":
     case "triage_split":
     case "triage_decline":

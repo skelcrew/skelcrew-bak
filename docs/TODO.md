@@ -69,7 +69,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
 - [x] **Your commands.** `skel add`, `ls`, `set`, `reply`, `approve`, `deny`, `pause`,
       `resume`, `start`, `retry` and `kill`, each answered at once. `attach`, `path` and
       `open` need real sessions and workspaces, so they wait for milestone 4.
-- [ ] **Agent commands.** `skel triage proceed|ask|split|decline`, `ask`, `progress`, `done`,
+- [x] **Agent commands.** `skel triage proceed|ask|split|decline`, `ask`, `progress`, `done`,
       `give-up`, `pass` and `changes`. A file argument, such as a brief, is read by `skel`
       and sent as text.
 - [ ] **Start on demand.** Any `skel` command starts the daemon if none runs, and waits until

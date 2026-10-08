@@ -2,7 +2,7 @@
 // the repository's lock, opens the store, reopens the loop from it, and
 // answers requests on a local socket until it is stopped.
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readConfig } from "../config/config";
 import type { SessionId } from "../core/ids";
@@ -39,9 +39,22 @@ export type Served = { ok: true; daemon: Daemon } | { ok: false; message: string
 
 // The fake tools, as the daemon's. Each reply comes back a moment later,
 // never from inside carryOut.
-function fakeTools(): Tools {
-  const fakes = new FakeTools();
-  return { carryOut: (command, reply) => setTimeout(() => reply(fakes.answer(command)), 0) };
+//
+// A fake session has no environment to hold its token, so the fake runner
+// writes the task's latest token to .skelcrew/sessions/<task>. You stand in
+// for its agent with SKELCREW_SESSION=$(cat .skelcrew/sessions/1). This goes
+// with the fakes in milestone 4.
+function fakeTools(fakes: FakeTools, tokens: Tokens, sessions: string): Tools {
+  return {
+    carryOut: (command, reply) => {
+      const answer = fakes.answer(command);
+      if (answer?.type === "session_started" && command.type === "start_session") {
+        mkdirSync(sessions, { recursive: true });
+        writeFileSync(join(sessions, `${command.taskId}`), `${tokens.tokenFor(answer.session)}\n`);
+      }
+      setTimeout(() => reply(answer), 0);
+    },
+  };
 }
 
 export async function serve(repo: string, options: ServeOptions = {}): Promise<Served> {
@@ -77,7 +90,10 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   } catch (error) {
     return fail(`.skelcrew/skelcrew.db couldn't be opened: ${String(error)}`);
   }
-  const opened = Loop.open(read.settings.config, options.tools ?? fakeTools(), store, {
+  const fakes = new FakeTools();
+  const tokens = new Tokens(loadSecret(join(paths.folder, "secret")));
+  const tools = options.tools ?? fakeTools(fakes, tokens, join(paths.folder, "sessions"));
+  const opened = Loop.open(read.settings.config, tools, store, {
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   if (!opened.ok) {
@@ -86,8 +102,8 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   }
   const loop = opened.loop;
 
-  const tokens = new Tokens(loadSecret(join(paths.folder, "secret")));
-  const listening = await listen(paths.socket, (line) => answerLine(loop, tokens, line));
+  const context = { loop, tokens, branchOf: () => fakes.branch() };
+  const listening = await listen(paths.socket, (line) => answerLine(context, line));
   // Each tick runs between requests, never during one, since both run on
   // this one thread and neither waits.
   const ticking = setInterval(() => {
