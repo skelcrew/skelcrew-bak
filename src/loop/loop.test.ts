@@ -3,7 +3,7 @@ import { TaskId } from "../core/ids";
 import { add, config, id, kill, start } from "../core/testing";
 import type { Command } from "../core/types";
 import { EventStore } from "../store/store";
-import { type Log, Loop, type Tools } from "./loop";
+import { type Log, Loop, type ReadableLog, type Tools } from "./loop";
 
 // Tools that only remember what they were handed.
 function recording(): Tools & { handed: Command[] } {
@@ -109,5 +109,54 @@ describe("starting what waits", () => {
     for (const finish of finishes) finish();
     expect(loop.inFlight).toBe(0);
     expect(loop.startWaiting(13)).toEqual([TaskId.parse(3)]);
+  });
+});
+
+describe("reopening after a restart", () => {
+  test("rebuilds every task, and sends unfinished commands again", () => {
+    const store = EventStore.open(":memory:");
+    const before = new Loop(config, { carryOut: () => {} }, store);
+    before.send(id, add(), 1_000);
+    before.send(id, start, 2_000);
+
+    const tools = recording();
+    const opened = Loop.open(config, tools, store);
+
+    if (!opened.ok) throw new Error(opened.reason);
+    expect(opened.loop.task(id)).toEqual(before.task(id));
+    expect(tools.handed).toEqual([{ type: "create_workspace", taskId: id, request: 1 }]);
+  });
+
+  test("forgets a resent command once its tool finishes", () => {
+    const store = EventStore.open(":memory:");
+    const before = new Loop(config, { carryOut: () => {} }, store);
+    before.send(id, add(), 1_000);
+    before.send(id, start, 2_000);
+
+    Loop.open(config, { carryOut: (_command, finished) => finished() }, store);
+    expect(store.loadCommands()).toEqual({ ok: true, commands: [] });
+  });
+
+  test("still counts the slot of a start sent for a task killed before the restart", () => {
+    const store = EventStore.open(":memory:");
+    const before = new Loop(config, { carryOut: () => {} }, store);
+    before.send(id, add(), 1_000);
+    before.send(id, start, 2_000);
+    before.send(id, kill, 3_000);
+
+    const opened = Loop.open(config, { carryOut: () => {} }, store);
+    expect(opened.ok && opened.loop.inFlight).toBe(1);
+  });
+
+  test("refuses to open a damaged log, saying where", () => {
+    const damaged: ReadableLog = {
+      append: () => ({ ok: true, ids: [] }),
+      carriedOut: () => ({ ok: true }),
+      loadTasks: () => ({ ok: false, seq: 7, reason: "not JSON" }),
+      loadCommands: () => ({ ok: true, commands: [] }),
+    };
+    const opened = Loop.open(config, recording(), damaged);
+
+    expect(opened).toEqual({ ok: false, reason: "Event 7: not JSON" });
   });
 });

@@ -21,7 +21,7 @@ split into tasks here.
       marked done when their tool finishes.
 - [x] **Loop.** Decide, save, evolve, carry out. A failed save changes nothing. The count of
       starts and stops the tasks no longer record, for the scheduler.
-- [ ] **Reopening.** Rebuild every task from the log, resend unfinished commands, and restore
+- [x] **Reopening.** Rebuild every task from the log, resend unfinished commands, and restore
       the count of starts in flight.
 - [ ] **Simulator.** The loop with fake tools and scripted agents, so whole lifecycles run in
       tests, including several tasks sharing `max_running`.

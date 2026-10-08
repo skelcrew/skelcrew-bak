@@ -12,7 +12,7 @@ import { evolve } from "../core/evolve";
 import { schedule } from "../core/schedule";
 import { waitingForSession } from "../core/task";
 import type { Command, Config, Decision, Input, Task, TaskEvent, TaskId } from "../core/types";
-import type { Queued, Saved } from "../store/store";
+import type { Loaded, Queued, Saved, SavedCommand } from "../store/store";
 
 // Carries out the core's commands: making workspaces, starting and stopping
 // sessions, merging. Replies come back later through Loop.send.
@@ -32,8 +32,14 @@ export interface Log {
   carriedOut(id: number): Saved;
 }
 
+// A saved log that can be read back, to pick up where a loop left off.
+export interface ReadableLog extends Log {
+  loadTasks(): Loaded<{ tasks: Map<TaskId, Task> }>;
+  loadCommands(): Loaded<{ commands: SavedCommand[] }>;
+}
+
 export class Loop {
-  private readonly tasks = new Map<TaskId, Task>();
+  private readonly tasks: Map<TaskId, Task>;
   // Commands handed to the tools whose work hasn't finished, by a key of our
   // own, since a command without a log has no id.
   private readonly pending = new Map<number, Command>();
@@ -43,7 +49,31 @@ export class Loop {
     private readonly config: Config,
     private readonly tools: Tools,
     private readonly log: Log,
-  ) {}
+    tasks: Map<TaskId, Task> = new Map(),
+  ) {
+    this.tasks = tasks;
+  }
+
+  // Picks up after a restart: every task rebuilt from the log, then every
+  // command not yet carried out sent again, including one whose work was
+  // still going on when the daemon died. The tools treat a repeat as doing
+  // nothing new. Since those commands are pending again, the count of slots
+  // in flight comes back too.
+  static open(
+    config: Config,
+    tools: Tools,
+    log: ReadableLog,
+  ): { ok: true; loop: Loop } | { ok: false; reason: string } {
+    const tasks = log.loadTasks();
+    if (!tasks.ok) return { ok: false, reason: `Event ${tasks.seq}: ${tasks.reason}` };
+    const unfinished = log.loadCommands();
+    if (!unfinished.ok) {
+      return { ok: false, reason: `Command ${unfinished.seq}: ${unfinished.reason}` };
+    }
+    const loop = new Loop(config, tools, log, tasks.tasks);
+    for (const { id, command } of unfinished.commands) loop.carryOut(command, id);
+    return { ok: true, loop };
+  }
 
   task(taskId: TaskId): Task | null {
     return this.tasks.get(taskId) ?? null;
@@ -83,16 +113,19 @@ export class Loop {
     }
 
     for (const event of decision.events) this.apply(event);
-    for (const [i, command] of decision.commands.entries()) {
-      const id = saved.ids[i];
-      const key = this.nextKey++;
-      this.pending.set(key, command);
-      this.tools.carryOut(command, () => {
-        this.pending.delete(key);
-        if (id !== undefined) this.log.carriedOut(id);
-      });
-    }
+    for (const [i, command] of decision.commands.entries()) this.carryOut(command, saved.ids[i]);
     return decision;
+  }
+
+  // Hands one command to the tools. It stays pending, and in the outbox,
+  // until its tool says it has finished.
+  private carryOut(command: Command, id: number | undefined): void {
+    const key = this.nextKey++;
+    this.pending.set(key, command);
+    this.tools.carryOut(command, () => {
+      this.pending.delete(key);
+      if (id !== undefined) this.log.carriedOut(id);
+    });
   }
 
   // decide never produces an event evolve refuses. If it ever does, that is a
