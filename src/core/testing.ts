@@ -306,3 +306,13 @@ export const usage = (
   workingMs = 60_000,
   cacheReads = 0,
 ): Input => ({ by: "daemon", type: "usage", session, usage: { tokens, cacheReads, workingMs } });
+
+export const set = (fields: { intent?: Intent; rigor?: Rigor; approve?: boolean }): Input => ({
+  by: "you",
+  type: "set",
+  intent: fields.intent ?? null,
+  rigor: fields.rigor ?? null,
+  approve: fields.approve ?? null,
+});
+
+export const attach: Input = { by: "you", type: "attach" };

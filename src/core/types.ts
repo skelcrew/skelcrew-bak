@@ -254,7 +254,9 @@ export type YourInput =
   | { type: "deny"; note: string }
   | { type: "decide_proposals"; approved: number[]; denied: number[] } // by index
   | { type: "attach" }
-  | { type: "detach"; choice: "resume" | "hand_over" }
+  | { type: "detach"; choice: "resume" }
+  // The daemon attaches `branch` from git, as it does for an agent's done.
+  | { type: "detach"; choice: "hand_over"; branch: BranchFacts }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "start_now" } // even past max_running
@@ -374,6 +376,10 @@ export type EventBody =
     }
   | { type: "task.triaged"; outcome: "decline"; reason: string }
   | { type: "task.set"; intent: Intent | null; rigor: Rigor | null; approve: boolean | null }
+  // Build starts over with this plan: when you change intent, or when your
+  // intent and rigor end triage. It waits for an agent's stop first, if one
+  // is stopping.
+  | { type: "build.restarted"; plan: Plan; waitForStop: boolean }
   // An `answer` merges nothing, so its handed-over commit goes to review as is.
   | { type: "review.ready"; reviewed: Reviewed }
   | { type: "workspace.requested"; request: number; tester: boolean }

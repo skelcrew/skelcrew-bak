@@ -34,7 +34,14 @@ export const evolve: Evolve = (task, event) => {
       if (task.hold !== null) return refuse(event, `#${task.id} is already held`);
       const rested = rest(task);
       if (rested === null) return refuse(event, `#${task.id} has ended`);
-      return ok({ ...rested, hold: event.hold, question: null, keptAnswer: null, lane: "queued" });
+      return ok({
+        ...rested,
+        hold: event.hold,
+        question: null,
+        keptAnswer: null,
+        attached: false,
+        lane: "queued",
+      });
     }
 
     // Your resume puts the task ahead of other queued work. A retry doesn't.
@@ -55,6 +62,52 @@ export const evolve: Evolve = (task, event) => {
     case "usage.recorded":
       return ok({ ...task, usage: { ...task.usage, [event.session]: event.usage } });
 
+    case "session.attached":
+      return ok({ ...task, attached: true });
+
+    case "session.detached":
+      return ok({ ...task, attached: false });
+
+    // During triage your fields wait for the planner's call. Later they
+    // change the plan. A new intent is applied by build.restarted.
+    case "task.set":
+      switch (task.phase) {
+        case "ended":
+          return refuse(event, `#${task.id} has ended`);
+        case "triage":
+          return ok({
+            ...task,
+            override: {
+              intent: event.intent ?? task.override.intent,
+              rigor: event.rigor ?? task.override.rigor,
+              approve: event.approve ?? task.override.approve,
+            },
+          });
+        default:
+          return ok({
+            ...task,
+            plan: {
+              ...task.plan,
+              rigor: event.rigor ?? task.plan.rigor,
+              approve: event.approve ?? task.plan.approve,
+            },
+          });
+      }
+
+    case "build.restarted":
+      if (task.phase === "ended") return refuse(event, `#${task.id} has ended`);
+      return ok(restarted(task, event.plan, event.waitForStop));
+
+    case "proposals.decided": {
+      if (task.phase !== "ended") return refuse(event, `#${task.id} hasn't ended`);
+      const proposals: Proposal[] = task.proposals.map((proposal, i) => {
+        if (event.approved.includes(i)) return { ...proposal, decision: "approved" };
+        if (event.denied.includes(i)) return { ...proposal, decision: "denied" };
+        return proposal;
+      });
+      return ok({ ...task, proposals });
+    }
+
     case "question.asked":
       if (task.question !== null) return refuse(event, `#${task.id} already has an open question`);
       return ok({ ...task, question: event.question });
@@ -73,6 +126,7 @@ export const evolve: Evolve = (task, event) => {
       return ok({
         ...task,
         stopping: { session: event.session, request: event.request, removes: event.removes },
+        attached: false,
         requests: Math.max(task.requests, event.request),
       });
 
@@ -407,6 +461,27 @@ function backToBuild(
     step,
     loops: task.loops + loops,
     feedback,
+    handover: null,
+    reviewed: null,
+  };
+}
+
+// Build starts over with a new plan, from any phase before the end. It waits
+// for an agent's stop first, if one is stopping. The workspace and loop
+// count stay.
+function restarted(
+  task: Exclude<Task, { phase: "ended" }>,
+  plan: Plan,
+  waitForStop: boolean,
+): Task {
+  return {
+    ...base(task),
+    phase: "build",
+    plan,
+    workspace: task.workspace,
+    step: waitForStop ? { kind: "awaiting_stop" } : { kind: "queued" },
+    loops: task.phase === "triage" ? 0 : task.loops,
+    feedback: null,
     handover: null,
     reviewed: null,
   };

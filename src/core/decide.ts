@@ -40,7 +40,7 @@ export const decide: Decide = (task, envelope, config) => {
   const ctx = makeContext(envelope, config);
   const { input } = envelope;
 
-  if (input.type === "add") return create(task, input, ctx);
+  if (input.type === "add" || input.type === "task_received") return create(task, input, ctx);
   if (task === null) return ctx.reject(`#${envelope.taskId} doesn't exist.`);
 
   const mismatch = senderMismatch(task, input);
@@ -77,9 +77,13 @@ function makeContext({ taskId, at, input }: Envelope, config: Config): Context {
 // The steps
 // ---------------------------------------------------------------------------
 
-// A task you add yourself. With intent and rigor given, it skips triage, and
-// its brief is its title and description.
-function create(task: Task | null, input: Input & { type: "add" }, ctx: Context): Decision {
+// A task you add, or one from the tracker. With intent and rigor given, it
+// skips triage, and its brief is its title and description.
+function create(
+  task: Task | null,
+  input: Input & { type: "add" | "task_received" },
+  ctx: Context,
+): Decision {
   if (task !== null) return ctx.reject(`#${task.id} already exists.`);
   if (isBlank(input.title)) return ctx.reject("A task needs a title.");
   const plan: Plan | null =
@@ -91,7 +95,7 @@ function create(task: Task | null, input: Input & { type: "add" }, ctx: Context)
       type: "task.received",
       title: input.title,
       description: input.description,
-      source: { kind: "local" },
+      source: input.type === "add" ? { kind: "local" } : input.source,
       plan,
     },
   ]);
@@ -106,6 +110,10 @@ const anyPhaseInputs = [
   "retry",
   "kill",
   "outside_change",
+  "set",
+  "attach",
+  "detach",
+  "decide_proposals",
   "give_up",
   "progress",
   "usage",
@@ -188,6 +196,57 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
         commands.push({ type: "remove_workspace", path: workspace.path, deleteBranch: false });
       }
       return ctx.accept(events, commands);
+    }
+
+    // Overrules the planner's call. See setPlan.
+    case "set":
+      if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
+      if (busy(task)) {
+        return ctx.reject(`#${task.id} is busy with a step. skel set waits until it settles.`);
+      }
+      return setPlan(task, input, ctx);
+
+    // You step into the agent's session. It keeps working, and keeps its slot.
+    case "attach":
+      if (runningSession(task) === null) return ctx.reject(`#${task.id} has no agent running.`);
+      if (task.attached) return ctx.reject(`#${task.id} is already attached.`);
+      return ctx.accept([{ type: "session.attached" }]);
+
+    // You step back out. The agent carries on, or you hand its work over as
+    // if it had run done.
+    case "detach": {
+      if (!task.attached) return ctx.reject(`#${task.id} isn't attached.`);
+      const detached: EventBody = { type: "session.detached", choice: input.choice };
+      if (input.choice === "resume") return ctx.accept([detached]);
+      const session = runningSession(task);
+      if (task.phase !== "build" || session === null) {
+        return ctx.reject("Only a builder's work can be handed over.");
+      }
+      const text = "Handed over by you.";
+      const handover: Handover =
+        task.plan.intent === "answer"
+          ? { kind: "report", text, proposals: [], branch: input.branch }
+          : { kind: "summary", text, branch: input.branch };
+      const out = handOver(task, session, handover);
+      return ctx.accept([detached, ...out.events], out.commands);
+    }
+
+    // Your call on tasks a split or an answer proposed. Approved ones become
+    // tasks of their own. Only pending proposals can be decided.
+    case "decide_proposals": {
+      if (task.phase !== "ended" || task.proposals.length === 0) {
+        return ctx.reject(`#${task.id} has no proposals waiting.`);
+      }
+      const indexes = [...input.approved, ...input.denied];
+      for (const [i, index] of indexes.entries()) {
+        const pending = task.proposals[index]?.decision === "pending";
+        if (!pending || indexes.indexOf(index) !== i) {
+          return ctx.reject(`Proposal ${index} of #${task.id} isn't waiting for you.`);
+        }
+      }
+      return ctx.accept([
+        { type: "proposals.decided", approved: input.approved, denied: input.denied },
+      ]);
     }
 
     case "outside_change":
@@ -541,23 +600,17 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
       if (input.type === "done" && input.branch.changedFiles.length === 0) {
         return ctx.reject("The branch has no changes.");
       }
-      const handover: EventBody =
+      const handover: Handover =
         input.type === "done"
-          ? {
-              type: "build.done",
-              handover: { kind: "summary", text: input.summary, branch: input.branch },
-            }
+          ? { kind: "summary", text: input.summary, branch: input.branch }
           : {
-              type: "build.done",
-              handover: {
-                kind: "report",
-                text: input.report,
-                proposals: input.proposals,
-                branch: input.branch,
-              },
+              kind: "report",
+              text: input.report,
+              proposals: input.proposals,
+              branch: input.branch,
             };
-      const stop = stopAgent(task, input.session, next(task), !answer, null);
-      return ctx.accept([handover, ...stop.events], stop.commands);
+      const out = handOver(task, input.session, handover);
+      return ctx.accept(out.events, out.commands);
     }
 
     // Main is in the branch. That commit is the one review, approval and
@@ -693,6 +746,89 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
     default:
       return finish(task, input, ctx, task.handover, task.evidence) ?? wrongPhase(task, input, ctx);
   }
+}
+
+// Records what the builder handed over and stops it, saving its work unless
+// it is an `answer`, which never edits. The task goes on once the stop is
+// confirmed.
+function handOver(task: TaskIn<"build">, session: SessionId, handover: Handover): Effects {
+  const stop = stopAgent(task, session, next(task), task.plan.intent !== "answer", null);
+  return { events: [{ type: "build.done", handover }, ...stop.events], commands: stop.commands };
+}
+
+// ---------------------------------------------------------------------------
+// Changing intent, rigor or approval
+// ---------------------------------------------------------------------------
+
+// `skel set`. Each field takes effect in its own way:
+// - During triage, a field wins over the planner's call when it comes.
+//   Intent and rigor together end triage, as adding with both skips it.
+// - Approval applies at once. Cleared while it waits for you, the task is
+//   delivered, unless a critical path still needs your sign-off.
+// - Rigor applies from the next phase, since agents read it when they start.
+// - A new intent restarts build with a fresh builder, since its permissions
+//   change. The branch and its commits stay.
+function setPlan(
+  task: Exclude<Task, { phase: "ended" }>,
+  input: Input & { type: "set" },
+  ctx: Context,
+): Decision {
+  const fields: EventBody = {
+    type: "task.set",
+    intent: input.intent,
+    rigor: input.rigor,
+    approve: input.approve,
+  };
+
+  if (task.phase === "triage") {
+    const intent = input.intent ?? task.override.intent;
+    const rigor = input.rigor ?? task.override.rigor;
+    if (intent === null || rigor === null) return ctx.accept([fields]);
+    const approve = input.approve ?? task.override.approve ?? false;
+    const plan: Plan = {
+      intent,
+      rigor,
+      approve,
+      brief: brief(task.title, task.description),
+      specPath: null,
+    };
+    return restartBuild(task, plan, [fields], ctx);
+  }
+
+  const plan: Plan = {
+    ...task.plan,
+    intent: input.intent ?? task.plan.intent,
+    rigor: input.rigor ?? task.plan.rigor,
+    approve: input.approve ?? task.plan.approve,
+  };
+  if (plan.intent !== task.plan.intent) return restartBuild(task, plan, [fields], ctx);
+
+  const { step, reviewed, handover } = task;
+  const approvalLifted = step.kind === "awaiting_approval" && !plan.approve;
+  if (approvalLifted && reviewed !== null && handover !== null) {
+    if (criticalFiles(reviewed.changedFiles, ctx.config.critical).length === 0) {
+      const evidence = task.phase === "review" ? task.evidence : null;
+      const out = deliver(task, plan, reviewed, handover, evidence, next(task));
+      return ctx.accept([fields, ...out.events], out.commands);
+    }
+  }
+  return ctx.accept([fields]);
+}
+
+// Build starts over with a new plan. A working agent is stopped first, and the
+// fresh builder starts once that stop is confirmed.
+function restartBuild(
+  task: Exclude<Task, { phase: "ended" }>,
+  plan: Plan,
+  before: EventBody[],
+  ctx: Context,
+): Decision {
+  const stop = stopRunning(task, next(task), null);
+  const waitForStop = stop.events.length > 0 || task.stopping !== null;
+  return ctx.accept(
+    [...before, ...stop.events, { type: "build.restarted", plan, waitForStop }],
+    stop.commands,
+  );
 }
 
 // ---------------------------------------------------------------------------
