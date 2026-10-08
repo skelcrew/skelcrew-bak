@@ -3,7 +3,7 @@
 
 import * as z from "zod";
 import { TaskId } from "../core/ids";
-import type { AgentInput, BranchFacts, Hold, Task, YourInput } from "../core/types";
+import type { BranchFacts, Hold, Task, YourInput } from "../core/types";
 import type { Loop } from "../loop/loop";
 import {
   type Answer,
@@ -14,6 +14,7 @@ import {
   VERSION,
   type WireInput,
 } from "../protocol/protocol";
+import { agentInput } from "./agent-input";
 import { refusal } from "./server";
 import type { Tokens } from "./tokens";
 
@@ -98,38 +99,13 @@ function fromAgent(context: Context, wire: WireInput, token: string): Handled {
   if (task === undefined) {
     return { ok: false, message: `Session ${session} no longer works on a task.` };
   }
-  const input = agents(wire, () => context.branchOf(task));
-  if (input === null) return { ok: false, message: `\`${wire.type}\` is your command.` };
-  const decision = loop.send(task.id, { by: "agent", session, ...input });
+  const made = agentInput(wire, () => context.branchOf(task));
+  if (made === null) return { ok: false, message: `\`${wire.type}\` is your command.` };
+  if (!made.ok) return made;
+  const decision = loop.send(task.id, { by: "agent", session, ...made.input });
   if (!decision.ok) return { ok: false, message: decision.rejection.reason };
   return { ok: true, result: { kind: "sent", task: task.id } };
 }
-
-// The input as an agent's, without its session, or null when it is yours.
-// A done gets the branch as git sees it, never as the agent says.
-function agents(
-  input: WireInput,
-  branch: () => BranchFacts,
-): DistributiveOmit<AgentInput, "session"> | null {
-  switch (input.type) {
-    case "done":
-    case "done_answer":
-      return { ...input, branch: branch() };
-    case "triage_proceed":
-    case "triage_split":
-    case "triage_decline":
-    case "ask":
-    case "progress":
-    case "give_up":
-    case "pass":
-    case "changes":
-      return input;
-    default:
-      return null;
-  }
-}
-
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 // The input as one of yours, or null when it is an agent's.
 function yours(input: WireInput): YourInput | null {

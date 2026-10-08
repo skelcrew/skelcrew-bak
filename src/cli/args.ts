@@ -6,12 +6,12 @@ import type { Intent, Rigor } from "../core/types";
 import type { WireInput } from "../protocol/protocol";
 import { intent, rigor } from "../store/schema";
 import { readAgentArgs } from "./agent-args";
-import { type Flags, fromDisk, type Read, type ReadFile, text, within } from "./parse";
+import { type Flags, type Read, text, within } from "./parse";
 
 export type { Read } from "./parse";
 
-// `files` reads the files an agent's command names.
-export function readArgs(args: string[], files: ReadFile = fromDisk): Read {
+// `cwd` is the folder skel runs in, which an agent's file paths start from.
+export function readArgs(args: string[], cwd: string = process.cwd()): Read {
   const [name = "help", ...rest] = args;
   switch (name) {
     case "ls":
@@ -44,7 +44,7 @@ export function readArgs(args: string[], files: ReadFile = fromDisk): Read {
 
     default:
       return (
-        readAgentArgs(name, rest, files) ?? {
+        readAgentArgs(name, rest, cwd) ?? {
           ok: false,
           message: `There is no \`skel ${name}\`. Run \`skel help\` for the commands.`,
         }

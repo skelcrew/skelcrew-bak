@@ -1,24 +1,27 @@
 // Reads an agent's `skel` commands into a request. The task isn't named: the
-// daemon knows it from the session's token. Files an agent hands over, such
-// as its brief, are read here and sent as text, so the daemon never reads an
-// agent's files.
+// daemon knows it from the session's token. A file an agent hands over, such
+// as its brief, goes by its full path, and the daemon reads it when the
+// command arrives, as the spec says.
 
+import { resolve } from "node:path";
 import type { WireInput } from "../protocol/protocol";
 import { intent, rigor } from "../store/schema";
-import { type Flags, type Read, type ReadFile, text, type Values, within } from "./parse";
+import { type Flags, type Read, text, type Values, within } from "./parse";
 
-// The request for one agent command, or null when `name` isn't one.
-export function readAgentArgs(name: string, args: string[], files: ReadFile): Read | null {
+// The request for one agent command, or null when `name` isn't one. Paths are
+// taken from `cwd`, the folder skel runs in.
+export function readAgentArgs(name: string, args: string[], cwd: string): Read | null {
+  const full = (path: string) => resolve(cwd, path);
   switch (name) {
     case "triage": {
       const [action = "", ...rest] = args;
       switch (action) {
         case "proceed":
-          return proceed(rest, files);
+          return proceed(rest, full);
         case "split":
-          return fromFile("triage split", rest, files, (body) => ({
+          return named("triage split", rest, (path) => ({
             type: "triage_split",
-            proposals: proposals(body),
+            tasksFile: full(path),
           }));
         case "ask":
           return ask("triage ask", rest);
@@ -38,23 +41,22 @@ export function readAgentArgs(name: string, args: string[], files: ReadFile): Re
     case "give-up":
       return said(name, args, "why", (message) => ({ type: "give_up", message }));
     case "done":
-      return done(args, files);
+      return done(args, full);
     case "pass":
-      return within(name, args, { evidence: { type: "string" } }, 0, (values) =>
-        withFile(text(values, "evidence"), files, "`skel pass` needs --evidence.", (evidence) => ({
-          type: "pass",
-          evidence,
-        })),
-      );
+      return within(name, args, { evidence: { type: "string" } }, 0, (values) => {
+        const evidence = text(values, "evidence");
+        if (evidence === null) return { ok: false, message: "`skel pass` needs --evidence." };
+        return sends({ type: "pass", evidenceFile: full(evidence) });
+      });
     case "changes":
-      return fromFile(name, args, files, (findings) => ({ type: "changes", findings }));
+      return named(name, args, (path) => ({ type: "changes", findingsFile: full(path) }));
     default:
       return null;
   }
 }
 
 // `skel triage proceed --intent ship --rigor full [--approve] --brief brief.md [--spec spec.md]`
-function proceed(args: string[], files: ReadFile): Read {
+function proceed(args: string[], full: (path: string) => string): Read {
   const flags: Flags = {
     intent: { type: "string" },
     rigor: { type: "string" },
@@ -65,28 +67,27 @@ function proceed(args: string[], files: ReadFile): Read {
   return within("triage proceed", args, flags, 0, (values) => {
     const chosenIntent = intent.safeParse(values.intent);
     const chosenRigor = rigor.safeParse(values.rigor);
-    const briefPath = text(values, "brief");
-    if (!chosenIntent.success || !chosenRigor.success || briefPath === null) {
+    const brief = text(values, "brief");
+    if (!chosenIntent.success || !chosenRigor.success || brief === null) {
       return { ok: false, message: "`skel triage proceed` needs --intent, --rigor and --brief." };
     }
-    const brief = files(briefPath);
-    if (!brief.ok) return cannotRead(briefPath);
-    const specPath = text(values, "spec");
-    const spec = specPath === null ? null : files(specPath);
-    if (spec !== null && !spec.ok) return cannotRead(specPath ?? "");
-    const plan = {
-      intent: chosenIntent.data,
-      rigor: chosenRigor.data,
-      approve: values.approve === true,
-      brief: brief.text,
-    };
-    return sends({ type: "triage_proceed", plan, spec: spec?.text ?? null });
+    const spec = text(values, "spec");
+    return sends({
+      type: "triage_proceed",
+      plan: {
+        intent: chosenIntent.data,
+        rigor: chosenRigor.data,
+        approve: values.approve === true,
+      },
+      briefFile: full(brief),
+      specFile: spec === null ? null : full(spec),
+    });
   });
 }
 
 // `skel done --summary summary.md`, or for an answer
 // `skel done --report report.md [--tasks tasks.md]`.
-function done(args: string[], files: ReadFile): Read {
+function done(args: string[], full: (path: string) => string): Read {
   const flags: Flags = {
     summary: { type: "string" },
     report: { type: "string" },
@@ -95,39 +96,33 @@ function done(args: string[], files: ReadFile): Read {
   return within("done", args, flags, 0, (values) => {
     const summary = text(values, "summary");
     const report = text(values, "report");
-    if ((summary === null) === (report === null)) {
-      return { ok: false, message: "`skel done` needs --summary, or --report for an answer." };
+    if (summary !== null && report === null) {
+      return sends({ type: "done", summaryFile: full(summary) });
     }
-    if (summary !== null)
-      return withFile(summary, files, "", (body) => ({ type: "done", summary: body }));
-    const tasksPath = text(values, "tasks");
-    const tasks = tasksPath === null ? null : files(tasksPath);
-    if (tasks !== null && !tasks.ok) return cannotRead(tasksPath ?? "");
-    return withFile(report, files, "", (body) => ({
-      type: "done_answer",
-      report: body,
-      proposals: tasks === null ? [] : proposals(tasks.text),
-    }));
+    if (report !== null && summary === null) {
+      const tasks = text(values, "tasks");
+      return sends({
+        type: "done_answer",
+        reportFile: full(report),
+        tasksFile: tasks === null ? null : full(tasks),
+      });
+    }
+    return { ok: false, message: "`skel done` needs --summary, or --report for an answer." };
   });
 }
 
 // `skel ask "question" [--option yes --option no]`
 function ask(name: string, args: string[]): Read {
-  return within(
-    name,
-    args,
-    { option: { type: "string", multiple: true } },
-    1,
-    (values, [question]) => {
-      if (question === undefined || question.trim() === "") {
-        return {
-          ok: false,
-          message: `Say what to ask, as in \`skel ${name} "Keep the old format?"\`.`,
-        };
-      }
-      return sends({ type: "ask", text: question, options: options(values) });
-    },
-  );
+  const flags: Flags = { option: { type: "string", multiple: true } };
+  return within(name, args, flags, 1, (values, [question]) => {
+    if (question === undefined || question.trim() === "") {
+      return {
+        ok: false,
+        message: `Say what to ask, as in \`skel ${name} "Keep the old format?"\`.`,
+      };
+    }
+    return sends({ type: "ask", text: question, options: options(values) });
+  });
 }
 
 // A command that says one thing, as in `skel progress "text"`.
@@ -145,39 +140,14 @@ function said(
   });
 }
 
-// A command that hands over one file, as in `skel changes findings.md`.
-function fromFile(
-  name: string,
-  args: string[],
-  files: ReadFile,
-  input: (body: string) => WireInput,
-): Read {
-  return within(name, args, {}, 1, (_values, [path]) =>
-    withFile(path ?? null, files, `Name the file, as in \`skel ${name} file.md\`.`, input),
-  );
-}
-
-function withFile(
-  path: string | null,
-  files: ReadFile,
-  missing: string,
-  input: (body: string) => WireInput,
-): Read {
-  if (path === null) return { ok: false, message: missing };
-  const read = files(path);
-  return read.ok ? sends(input(read.text)) : cannotRead(path);
-}
-
-// Proposed tasks, one per `## Title` heading, with the text below it as the
-// task's description.
-function proposals(markdown: string): { title: string; description: string }[] {
-  return markdown
-    .split(/^## /m)
-    .slice(1)
-    .map((section) => {
-      const [title = "", ...rest] = section.split("\n");
-      return { title: title.trim(), description: rest.join("\n").trim() };
-    });
+// A command that names one file, as in `skel changes findings.md`.
+function named(name: string, args: string[], input: (path: string) => WireInput): Read {
+  return within(name, args, {}, 1, (_values, [path]) => {
+    if (path === undefined) {
+      return { ok: false, message: `Name the file, as in \`skel ${name} file.md\`.` };
+    }
+    return sends(input(path));
+  });
 }
 
 function options(values: Values): string[] {
@@ -187,8 +157,4 @@ function options(values: Values): string[] {
 
 function sends(input: WireInput): Read {
   return { ok: true, call: { type: "send", task: null, input } };
-}
-
-function cannotRead(path: string): Read {
-  return { ok: false, message: `${path} can't be read.` };
 }

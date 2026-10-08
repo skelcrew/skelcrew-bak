@@ -10,7 +10,7 @@
 import * as z from "zod";
 import { TaskId } from "../core/ids";
 import type { AgentInput, Task, YourInput } from "../core/types";
-import { intent, proposal, rigor } from "../store/schema";
+import { intent, rigor } from "../store/schema";
 
 export const VERSION = 1;
 
@@ -21,6 +21,9 @@ export const MAX_LINE = 1_000_000;
 // ---------------------------------------------------------------------------
 // What you and agents send
 // ---------------------------------------------------------------------------
+
+// A file's full path.
+const path = z.string().startsWith("/");
 
 const input = z.discriminatedUnion("type", [
   // Your inputs, as the core takes them. Attaching and detaching need a real
@@ -53,25 +56,24 @@ const input = z.discriminatedUnion("type", [
 
   // An agent's inputs, as the core takes them but without what the daemon
   // adds: the session, known from the caller's token, and the branch, read
-  // from git.
+  // from git. A file the agent hands over, such as its brief, comes as a
+  // full path: the daemon reads it when the command arrives, as the spec
+  // says, and saves its text.
   z.strictObject({
     type: z.literal("triage_proceed"),
-    plan: z.strictObject({ intent, rigor, approve: z.boolean(), brief: z.string() }),
-    spec: z.string().nullable(),
+    plan: z.strictObject({ intent, rigor, approve: z.boolean() }),
+    briefFile: path,
+    specFile: path.nullable(),
   }),
-  z.strictObject({ type: z.literal("triage_split"), proposals: z.array(proposal) }),
+  z.strictObject({ type: z.literal("triage_split"), tasksFile: path }),
   z.strictObject({ type: z.literal("triage_decline"), reason: z.string().min(1) }),
   z.strictObject({ type: z.literal("ask"), text: z.string().min(1), options: z.array(z.string()) }),
   z.strictObject({ type: z.literal("progress"), text: z.string().min(1) }),
-  z.strictObject({ type: z.literal("done"), summary: z.string() }),
-  z.strictObject({
-    type: z.literal("done_answer"),
-    report: z.string(),
-    proposals: z.array(proposal),
-  }),
+  z.strictObject({ type: z.literal("done"), summaryFile: path }),
+  z.strictObject({ type: z.literal("done_answer"), reportFile: path, tasksFile: path.nullable() }),
   z.strictObject({ type: z.literal("give_up"), message: z.string().min(1) }),
-  z.strictObject({ type: z.literal("pass"), evidence: z.string() }),
-  z.strictObject({ type: z.literal("changes"), findings: z.string() }),
+  z.strictObject({ type: z.literal("pass"), evidenceFile: path }),
+  z.strictObject({ type: z.literal("changes"), findingsFile: path }),
 ]);
 export type WireInput = z.infer<typeof input>;
 

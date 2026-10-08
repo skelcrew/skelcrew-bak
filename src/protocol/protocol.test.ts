@@ -25,7 +25,7 @@ const done: Request = {
   v: VERSION,
   id: "2",
   token: "secret-token",
-  call: { type: "send", task: null, input: { type: "done", summary: "Fixed it." } },
+  call: { type: "send", task: null, input: { type: "done", summaryFile: "/work/summary.md" } },
 };
 
 describe("a request", () => {

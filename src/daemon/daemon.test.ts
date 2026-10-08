@@ -338,8 +338,21 @@ describe("an agent's done", () => {
 
     // The fake session runner leaves the builder's token where you can find it.
     const token = readFileSync(join(repo, ".skelcrew", "sessions", "1"), "utf8").trim();
-    const done: Call = { type: "send", task: null, input: { type: "done", summary: "Fixed it." } };
-    expect(await send(daemon.socket, done, token)).toEqual({
+
+    // The daemon reads the file the agent names, as the spec says.
+    const missing = join(folder(), "summary.md");
+    const doneWith = (summaryFile: string): Call => ({
+      type: "send",
+      task: null,
+      input: { type: "done", summaryFile },
+    });
+    expect(await send(daemon.socket, doneWith(missing), token)).toEqual({
+      ok: false,
+      message: `${missing} can't be read.`,
+    });
+
+    writeFileSync(missing, "Fixed it.");
+    expect(await send(daemon.socket, doneWith(missing), token)).toEqual({
       ok: true,
       result: { kind: "sent", task: TaskId.parse(1) },
     });
@@ -380,7 +393,9 @@ describe("a request the daemon fails on", () => {
     });
     const token = readFileSync(join(repo, ".skelcrew", "sessions", "1"), "utf8").trim();
 
-    const done: Call = { type: "send", task: null, input: { type: "done", summary: "Fixed it." } };
+    const summaryFile = join(folder(), "summary.md");
+    writeFileSync(summaryFile, "Fixed it.");
+    const done: Call = { type: "send", task: null, input: { type: "done", summaryFile } };
     expect(await send(daemon.socket, done, token)).toEqual({
       ok: false,
       message: "The daemon failed on this request: git isn't installed",
