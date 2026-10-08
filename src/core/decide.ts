@@ -31,6 +31,7 @@ import {
   waitingForSlot,
 } from "./task";
 import type {
+  AddPlan,
   Command,
   Config,
   Decide,
@@ -143,10 +144,8 @@ function create(
 ): Decision {
   if (task !== null) return ctx.reject(`#${task.id} already exists.`);
   if (isBlank(input.title)) return ctx.reject("A task needs a title.");
-  const plan: Plan | null =
-    input.plan === null
-      ? null
-      : { ...input.plan, brief: brief(input.title, input.description), specPath: null };
+  const plan =
+    input.plan === null ? null : skippingTriage(input.plan, input.title, input.description);
   return ctx.accept([
     {
       type: "task.received",
@@ -905,13 +904,7 @@ function setPlan(
     const rigor = input.rigor ?? task.override.rigor;
     if (intent === null || rigor === null) return ctx.accept([fields]);
     const approve = input.approve ?? task.override.approve ?? false;
-    const plan: Plan = {
-      intent,
-      rigor,
-      approve,
-      brief: brief(task.title, task.description),
-      specPath: null,
-    };
+    const plan = skippingTriage({ intent, rigor, approve }, task.title, task.description);
     return restartBuild(task, plan, [fields], ctx);
   }
 
@@ -1149,8 +1142,11 @@ function notWaitingFor(task: Task, request: number): string {
   return `This reply answers request ${request}, but #${task.id} isn't waiting on it.`;
 }
 
-function brief(title: string, description: string | null): string {
-  return description === null ? title : `${title}\n\n${description}`;
+// The plan of a task that skips triage: your intent, rigor and approval,
+// with its title and description as the brief.
+function skippingTriage(yours: AddPlan, title: string, description: string | null): Plan {
+  const brief = description === null ? title : `${title}\n\n${description}`;
+  return { ...yours, brief, specPath: null };
 }
 
 function isBlank(text: string): boolean {
