@@ -155,7 +155,7 @@ export class Simulator {
     const stops = job.kind === "reply" ? job.stops : null;
     if (stops !== null) this.live.delete(stops);
     if (job.kind === "reply") job.reply(job.input);
-    else this.loop.send(job.taskId, job.input, this.tick());
+    else this.loop.send(job.taskId, job.input);
     if (!this.saveFailed) return true;
     if (stops !== null) this.live.add(stops);
     const after = job.taskId === null ? null : this.loop.task(job.taskId);

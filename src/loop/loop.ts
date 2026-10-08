@@ -57,6 +57,8 @@ export class Loop {
   // Set by dispatch while it hands commands to the tools. handle refuses any
   // input while it is set, which catches a tool replying from inside carryOut.
   private busy = false;
+  // The one clock: every input is stamped with its time, whoever sent it.
+  // The real clock in the daemon, a fake one in tests.
   private readonly now: () => number;
 
   constructor(
@@ -112,9 +114,9 @@ export class Loop {
 
   // Delivers kept answers and starts the tasks the scheduler picks, within
   // max_running. Returns the tasks it picked.
-  startWaiting(at: number): TaskId[] {
+  startWaiting(): TaskId[] {
     const picks = this.picks();
-    for (const { taskId, input } of picks) this.send(taskId, input, at);
+    for (const { taskId, input } of picks) this.send(taskId, input);
     return picks.map(({ taskId }) => taskId);
   }
 
@@ -128,9 +130,9 @@ export class Loop {
     });
   }
 
-  // One input for one task, at the given time.
-  send(taskId: TaskId, input: Input, at: number): Decision {
-    return this.handle(taskId, input, at, []).decision;
+  // One input for one task, at the time on the loop's clock.
+  send(taskId: TaskId, input: Input): Decision {
+    return this.handle(taskId, input, []).decision;
   }
 
   // Decides on one input, saves the decision with the commands it answers
@@ -138,11 +140,10 @@ export class Loop {
   private handle(
     taskId: TaskId,
     input: Input,
-    at: number,
     answered: number[],
   ): { decision: Decision; saveFailed: boolean } {
     if (this.busy) throw new Error("A tool replied from inside carryOut. Reply later instead.");
-    const decision = decide(this.task(taskId), { taskId, at, input }, this.config);
+    const decision = decide(this.task(taskId), { taskId, at: this.now(), input }, this.config);
     if (!decision.ok) return { decision, saveFailed: false };
 
     const saved = this.log.append(decision.events, decision.commands, answered);
@@ -203,7 +204,7 @@ export class Loop {
   // save failed, so the tool replies again later.
   private answer(command: Command, input: Input | null, id: number): boolean {
     if (input === null || !("taskId" in command)) return this.log.carriedOut(id).ok;
-    const handled = this.handle(command.taskId, input, this.now(), [id]);
+    const handled = this.handle(command.taskId, input, [id]);
     if (handled.saveFailed) return false;
     if (!handled.decision.ok) return this.log.carriedOut(id).ok;
     return true;
