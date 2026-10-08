@@ -13,7 +13,9 @@ Parts marked _planned_ don't exist yet.
 | Loop | `src/loop/` | Runs each input through the core, saves events and commands together, then hands the commands to the tools. Reopens from the store after a restart. |
 | Store | `src/store/` | The event log and the outbox in SQLite, every row checked by Zod when written and read. |
 | Simulator | `src/sim/` | The loop with fake tools and scripted agents, so whole lifecycles run in tests. |
-| Daemon | `src/daemon/` _planned_ | Holds the loop, answers the CLI over a local socket, and carries out commands through the plugins. |
+| Daemon | `src/daemon/` | One per repository, held by a lock. Holds the loop, answers the CLI over a local socket, and carries out commands through the plugins. |
+| Protocol | `src/protocol/` | The versioned messages between the CLI and the daemon, checked by Zod on both sides. |
+| Config | `src/config/` | Reads `skelcrew.yaml`, checked by Zod. |
 | CLI | `src/cli/` _planned_ | `skel`, for you and for agents. Holds no state. |
 | Plugins | `src/plugins/` _planned_ | The harness (Claude Code), the session runner (tmux), git, and outputs. |
 | Checks | `src/checks/` | The test watchdog, which stops a hung test run. |
