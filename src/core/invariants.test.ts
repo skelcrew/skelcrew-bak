@@ -384,8 +384,12 @@ export function step(world: World, choice: Choice, at: number): void {
   const pool = choice.guided && forward.length > 0 && choice.n % 4 !== 0 ? forward : accepted;
   const from = pool.length > 0 ? pool : all;
   const input = from[choice.n % from.length];
-  if (input === undefined) return;
+  if (input !== undefined) apply(world, input, at);
+}
 
+// Sends one input to the task, applies what is accepted, and checks the rules.
+function apply(world: World, input: Input, at: number): void {
+  const envelope = (input: Input) => ({ taskId: world.id, at, input });
   const before = world.task;
   const decision = decide(before, envelope(input), world.config);
 
@@ -722,25 +726,7 @@ function sharedLifecycle(config: Config, choices: Choice[]): void {
           owner.task?.keptAnswer !== null
             ? { by: "daemon", type: "deliver_answer" }
             : { by: "daemon", type: "start" };
-        const decision = decide(owner.task, { taskId: picked, at: 1_000 + i, input }, config);
-        if (!decision.ok) continue;
-        let task = owner.task;
-        for (const event of decision.events) {
-          const evolved = evolve(task, event);
-          if (!evolved.ok) throw new Error(`evolve refused decide's event: ${evolved.reason}`);
-          task = evolved.task;
-        }
-        owner.task = task;
-        owner.log.push(...decision.events);
-        owner.sent.push(...decision.commands);
-        for (const command of decision.commands) {
-          if (command.type === "start_session") {
-            owner.sessions.set(sessionFor(command.request), {
-              role: command.role,
-              edits: command.edits,
-            });
-          }
-        }
+        apply(owner, input, 1_000 + i);
       }
       const after = worlds.flatMap((w) => (w.task === null ? [] : [w.task]));
       expect(slotsInUse(after, 0)).toBeLessThanOrEqual(Math.max(before, config.maxRunning));
