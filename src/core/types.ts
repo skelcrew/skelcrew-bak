@@ -403,6 +403,7 @@ export type EventBody =
   | { type: "task.held"; hold: Hold }
   | { type: "task.released" } // your resume or retry lifts the hold
   | { type: "task.started_now" }
+  | { type: "agent.progress"; session: SessionId; text: string }
   | { type: "build.done"; handover: Handover }
   | { type: "spec.requested"; request: number; text: string }
   | { type: "spec.committed"; path: string }

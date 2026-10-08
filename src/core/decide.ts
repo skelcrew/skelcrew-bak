@@ -99,6 +99,16 @@ function create(task: Task | null, input: Input & { type: "add" }, ctx: Context)
 
 // Inputs whose rules don't depend on the phase.
 const anyPhaseInputs = [
+  "start",
+  "start_now",
+  "pause",
+  "resume",
+  "retry",
+  "kill",
+  "outside_change",
+  "give_up",
+  "progress",
+  "usage",
   "workspace_failed",
   "session_started",
   "session_failed",
@@ -116,6 +126,103 @@ function worksInAnyPhase(input: Input): input is AnyPhaseInput {
 
 function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
   switch (input.type) {
+    // The scheduler picked the task for a free slot, or you started it now.
+    // Either way it carries on from where it waits.
+    case "start":
+    case "start_now": {
+      if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
+      if (task.hold !== null) return ctx.reject(`#${task.id} is held.`);
+      if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
+      const go = carryOn(task);
+      const yours: EventBody[] = input.type === "start_now" ? [{ type: "task.started_now" }] : [];
+      return ctx.accept([...yours, ...go.events], go.commands);
+    }
+
+    // The agent stops, with its work saved, and the task waits for you. A step
+    // under way, such as a workspace being made, settles first: the CLI waits
+    // and sends the pause again.
+    case "pause": {
+      if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
+      if (task.hold !== null) return ctx.reject(`#${task.id} is already held.`);
+      if (busy(task)) {
+        return ctx.reject(`#${task.id} is busy with a step. skel pause waits until it settles.`);
+      }
+      const stop = stopRunning(task, next(task), null);
+      return ctx.accept([held({ kind: "paused" }), ...stop.events], stop.commands);
+    }
+
+    case "resume":
+      if (task.hold === null) return ctx.reject(`#${task.id} isn't held.`);
+      if (task.hold.kind !== "paused") {
+        return ctx.reject(`#${task.id} isn't paused. Retry it instead.`);
+      }
+      return ctx.accept([{ type: "task.released" }]);
+
+    // Lifts a hold from anything that went wrong. A failed merge, spec or
+    // delivery is sent again. Anything else waits for a slot.
+    case "retry": {
+      if (task.hold === null) return ctx.reject(`#${task.id} isn't held.`);
+      if (task.hold.kind === "paused")
+        return ctx.reject(`#${task.id} is paused. Resume it instead.`);
+      const again = resend(task);
+      return ctx.accept([{ type: "task.released" }, ...again.events], again.commands);
+    }
+
+    // The task ends, whatever it was doing. A working agent is stopped with
+    // its work saved, then its workspace is removed. The branch stays, since
+    // it holds the work.
+    case "kill": {
+      if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
+      const { workspace } = task;
+      const remove = workspace === null ? null : { path: workspace.path, deleteBranch: false };
+      const stop = stopRunning(task, next(task), remove);
+      const events: EventBody[] = [{ type: "task.killed" }, ...stop.events];
+      const commands = [...stop.commands];
+      // A planner's or builder's stop removes the workspace once its work is
+      // saved. A tester's stop only removes its copy, and a stop already on
+      // its way removes the workspace when it is confirmed (see afterStop).
+      // Otherwise nothing is working in it, so it goes now.
+      const goesWithStop = stop.events.length > 0 && task.phase !== "review";
+      if (workspace !== null && !goesWithStop && task.stopping === null) {
+        events.push({ type: "workspace.removed", path: workspace.path });
+        commands.push({ type: "remove_workspace", path: workspace.path, deleteBranch: false });
+      }
+      return ctx.accept(events, commands);
+    }
+
+    case "outside_change":
+      return ctx.reject(
+        `Tasks move only through Skelcrew. The ${input.what} in the tracker was ignored.`,
+      );
+
+    // The agent can't go on. It is stopped, and the task waits for you.
+    case "give_up": {
+      const stop = stopRunning(task, next(task), null);
+      return ctx.accept(
+        [held({ kind: "gave_up", message: input.message }), ...stop.events],
+        stop.commands,
+      );
+    }
+
+    // For the log and the screen. Nothing else changes.
+    case "progress":
+      return ctx.accept([{ type: "agent.progress", session: input.session, text: input.text }]);
+
+    // Running totals per session, shown and never enforced. Totals only grow,
+    // so a lower report is an older one.
+    case "usage": {
+      const last = task.usage[input.session];
+      if (
+        last !== undefined &&
+        (input.usage.tokens < last.tokens ||
+          input.usage.cacheReads < last.cacheReads ||
+          input.usage.workingMs < last.workingMs)
+      ) {
+        return ctx.reject(`This usage report for ${input.session} is older than the last one.`);
+      }
+      return ctx.accept([{ type: "usage.recorded", session: input.session, usage: input.usage }]);
+    }
+
     // A workspace, or the tester's copy, couldn't be made. The task waits
     // for your retry.
     case "workspace_failed":
@@ -170,7 +277,7 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
           held({ kind: "failed", step: "save", message: input.message }),
         ]);
       }
-      const after = afterStop(task);
+      const after = afterStop(task, stopping.removes, input.saved);
       return ctx.accept([confirmed, ...after.events], after.commands);
     }
 
@@ -216,20 +323,44 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
 }
 
 // What happens once an agent's stop is confirmed. The next agent on a task
-// only starts now, so two never work on it at once.
-function afterStop(task: Task): Effects {
+// only starts now, so two never work on it at once. A task killed while an
+// agent was stopping removes its workspace now, once its work is safe.
+function afterStop(task: Task, removed: string | null, saved: string): Effects {
   const none: Effects = { events: [], commands: [] };
+  if (task.phase === "ended") {
+    const { kept } = task;
+    if (kept === null || kept.path === removed || saved === "save_failed") return none;
+    return {
+      events: [{ type: "workspace.removed", path: kept.path }],
+      commands: [{ type: "remove_workspace", path: kept.path, deleteBranch: false }],
+    };
+  }
   if (task.phase !== "build" || task.step.kind !== "awaiting_stop" || task.hold !== null) {
     return none;
   }
-  if (task.workspace === null) return none;
+  return carryOn(task);
+}
+
+// Starts the task's next step from where it waits: its workspace, or its
+// next agent, or for a build that was handed over, the merge or review.
+function carryOn(task: Exclude<Task, { phase: "ended" }>): Effects {
+  if (task.workspace === null) return createWorkspace(task, next(task));
+  switch (task.phase) {
+    case "triage":
+      return startPlanner(task, task.workspace, next(task));
+    case "review":
+      return startCopy(task, task.reviewed, next(task));
+    case "build":
+      return carryOnBuilding(task, task.workspace);
+  }
+}
+
+// A build goes on from what was handed over, so nothing is built twice.
+function carryOnBuilding(task: TaskIn<"build">, workspace: Workspace): Effects {
   const { handover } = task;
 
-  // The planner or tester stopped, or a builder was let go: a fresh builder
-  // starts, told why it is back.
-  if (handover === null) {
-    return startBuilder(task, task.workspace, task.plan, task.feedback, next(task));
-  }
+  // Nothing handed over yet: a fresh builder starts, told why it is back.
+  if (handover === null) return startBuilder(task, workspace, task.plan, task.feedback, next(task));
 
   // An `answer` merges nothing, so its handed-over commit is reviewed as is.
   if (task.plan.intent === "answer") {
@@ -241,11 +372,40 @@ function afterStop(task: Task): Effects {
   }
 
   // `ship` and `try` are brought up to date with main first.
-  const request = next(task);
-  return {
-    events: [{ type: "main.requested", request }],
-    commands: [{ type: "merge_main", taskId: task.id, request, workspace: task.workspace }],
-  };
+  return mergeMain(task, workspace, next(task));
+}
+
+// Sends again what failed, after your retry: a merge, a spec commit, or a
+// delivery. Anything else waits for a slot.
+function resend(task: Task): Effects {
+  const none: Effects = { events: [], commands: [] };
+  if (task.phase === "ended") return none;
+  const { step } = task;
+  if (step.kind === "merging_main" && task.workspace !== null) {
+    return mergeMain(task, task.workspace, next(task));
+  }
+  if (step.kind === "committing_spec" && task.workspace !== null) {
+    const request = next(task);
+    return {
+      events: [{ type: "spec.requested", request, text: step.text }],
+      commands: [
+        {
+          type: "commit_spec",
+          taskId: task.id,
+          request,
+          workspace: task.workspace,
+          text: step.text,
+        },
+      ],
+    };
+  }
+  if (step.kind === "delivering" && task.phase !== "triage" && task.reviewed !== null) {
+    const handover = task.handover;
+    if (handover === null) return none;
+    const evidence = task.phase === "review" ? task.evidence : null;
+    return deliver(task, task.plan, task.reviewed, handover, evidence, next(task));
+  }
+  return none;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,33 +414,15 @@ function afterStop(task: Task): Effects {
 
 function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision {
   switch (input.type) {
-    // The scheduler picked the task. Its workspace is made first.
-    case "start":
-      if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
-      return ctx.accept(...createWorkspace(task, next(task)));
-
     // The planner starts in the new workspace, read only.
     case "workspace_created": {
       if (!waitingForWorkspace(task, input.request)) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
-      const request = next(task);
+      const planner = startPlanner(task, input.workspace, next(task));
       return ctx.accept(
-        [
-          { type: "workspace.created", workspace: input.workspace },
-          { type: "session.requested", request, role: "planner" },
-        ],
-        [
-          {
-            type: "start_session",
-            taskId: task.id,
-            request,
-            role: "planner",
-            cwd: input.workspace.path,
-            edits: false,
-            context: sessionContext(task, null, null),
-          },
-        ],
+        [{ type: "workspace.created", workspace: input.workspace }, ...planner.events],
+        planner.commands,
       );
     }
 
@@ -368,15 +510,6 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
 
 function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
   switch (input.type) {
-    // The scheduler picked the task. A task that skipped triage has no
-    // workspace yet, so that is made first. Otherwise the builder starts.
-    case "start": {
-      if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
-      if (task.workspace === null) return ctx.accept(...createWorkspace(task, next(task)));
-      const builder = startBuilder(task, task.workspace, task.plan, task.feedback, next(task));
-      return ctx.accept(builder.events, builder.commands);
-    }
-
     case "workspace_created": {
       if (!waitingForWorkspace(task, input.request)) {
         return ctx.reject(notWaitingFor(task, input.request));
@@ -675,11 +808,37 @@ function finish(
 type Effects = { events: EventBody[]; commands: Command[] };
 
 // Makes the task's workspace: a worktree on a new branch from main.
-function createWorkspace(task: Task, request: number): [EventBody[], Command[]] {
-  return [
-    [{ type: "workspace.requested", request, tester: false }],
-    [{ type: "create_workspace", taskId: task.id, request }],
-  ];
+function createWorkspace(task: Task, request: number): Effects {
+  return {
+    events: [{ type: "workspace.requested", request, tester: false }],
+    commands: [{ type: "create_workspace", taskId: task.id, request }],
+  };
+}
+
+// Brings the branch up to date with main, in the builder's workspace.
+function mergeMain(task: Task, workspace: Workspace, request: number): Effects {
+  return {
+    events: [{ type: "main.requested", request }],
+    commands: [{ type: "merge_main", taskId: task.id, request, workspace }],
+  };
+}
+
+// Starts the planner in the task's workspace, read only.
+function startPlanner(task: Task, workspace: Workspace, request: number): Effects {
+  return {
+    events: [{ type: "session.requested", request, role: "planner" }],
+    commands: [
+      {
+        type: "start_session",
+        taskId: task.id,
+        request,
+        role: "planner",
+        cwd: workspace.path,
+        edits: false,
+        context: sessionContext(task, null, null),
+      },
+    ],
+  };
 }
 
 // Makes the tester's own copy of the reviewed commit, which starts review.
@@ -713,6 +872,21 @@ function startBuilder(
       },
     ],
   };
+}
+
+// Stops whichever agent is working, if any. A builder that can edit has its
+// work saved. A tester's copy is removed with it. `remove` is the workspace
+// to remove too, for a planner or builder.
+function stopRunning(
+  task: Task,
+  request: number,
+  remove: { path: string; deleteBranch: boolean } | null,
+): Effects {
+  const session = runningSession(task);
+  if (session === null) return { events: [], commands: [] };
+  if (task.phase === "review") return stopTester(task, session, request);
+  const save = task.phase === "build" && task.plan.intent !== "answer";
+  return stopAgent(task, session, request, save, remove);
 }
 
 // Stops the tester and removes its copy. It never edits, so nothing is saved.
@@ -778,6 +952,22 @@ function wrongPhase(task: Task, input: Input, ctx: Context): Decision {
 
 function held(hold: Hold): EventBody {
   return { type: "task.held", hold };
+}
+
+// Whether a step is under way that a pause must wait for: something is being
+// made, started, merged or delivered.
+function busy(task: Exclude<Task, { phase: "ended" }>): boolean {
+  switch (task.step.kind) {
+    case "creating_workspace":
+    case "creating_copy":
+    case "starting":
+    case "committing_spec":
+    case "merging_main":
+    case "delivering":
+      return true;
+    default:
+      return false;
+  }
 }
 
 // Whether the task waits for the workspace, or tester's copy, of this request.

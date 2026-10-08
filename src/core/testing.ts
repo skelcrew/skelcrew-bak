@@ -293,3 +293,16 @@ export function reviewRunning(
     sessionStarted(8, tester),
   ]);
 }
+
+export const pause: Input = { by: "you", type: "pause" };
+export const resume: Input = { by: "you", type: "resume" };
+export const retry: Input = { by: "you", type: "retry" };
+export const kill: Input = { by: "you", type: "kill" };
+export const startNow: Input = { by: "you", type: "start_now" };
+
+export const usage = (
+  session: SessionId,
+  tokens: number,
+  workingMs = 60_000,
+  cacheReads = 0,
+): Input => ({ by: "daemon", type: "usage", session, usage: { tokens, cacheReads, workingMs } });

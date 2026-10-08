@@ -11,7 +11,6 @@ import type {
   Evolve,
   Evolved,
   Feedback,
-  Hold,
   Outcome,
   Plan,
   Proposal,
@@ -33,10 +32,28 @@ export const evolve: Evolve = (task, event) => {
     // step goes back to the queue for a retry.
     case "task.held": {
       if (task.hold !== null) return refuse(event, `#${task.id} is already held`);
-      const rested = rest(task, event.hold);
+      const rested = rest(task);
       if (rested === null) return refuse(event, `#${task.id} has ended`);
-      return ok({ ...rested, hold: event.hold, question: null, keptAnswer: null });
+      return ok({ ...rested, hold: event.hold, question: null, keptAnswer: null, lane: "queued" });
     }
+
+    // Your resume puts the task ahead of other queued work. A retry doesn't.
+    case "task.released":
+      if (task.hold === null) return refuse(event, `#${task.id} isn't held`);
+      return ok({ ...task, hold: null, lane: task.hold.kind === "paused" ? "resumed" : task.lane });
+
+    case "task.killed":
+      if (task.phase === "ended") return refuse(event, `#${task.id} has ended`);
+      return ok(toEnded(task, { kind: "killed" }, []));
+
+    // Facts for the record. The input that follows in the same decision does
+    // the work.
+    case "task.started_now":
+    case "agent.progress":
+      return ok(task);
+
+    case "usage.recorded":
+      return ok({ ...task, usage: { ...task.usage, [event.session]: event.usage } });
 
     case "question.asked":
       if (task.question !== null) return refuse(event, `#${task.id} already has an open question`);
@@ -177,6 +194,13 @@ function inTriage(task: TaskIn<"triage">, event: TaskEvent): Evolved {
           return ok(toEnded(task, { kind: "declined", reason: event.reason }, []));
       }
       break;
+
+    // Your retry sends a failed spec commit again.
+    case "spec.requested":
+      if (task.step.kind !== "committing_spec") {
+        return refuse(event, `#${task.id} isn't committing a spec`);
+      }
+      return ok(withRequest(task, event.request, { ...task.step, request: event.request }));
 
     case "spec.committed":
       if (task.step.kind !== "committing_spec") {
@@ -407,22 +431,32 @@ function toEnded(
   };
 }
 
-// Where a held task waits. Its agent is stopped, so a step with an agent goes
-// back to the queue, for a fresh one after your retry. A failed merge or
-// delivery keeps its step, so your retry sends it again. Null for an ended
-// task, which can't be held.
-function rest(task: Task, hold: Hold): Task | null {
-  if (task.phase === "ended") return null;
-  const resend = hold.kind === "failed" && (hold.step === "merge_main" || hold.step === "delivery");
-  if (resend) return task;
+// Where a held task waits. Its agent is stopped, so a step with an agent
+// goes back to the queue, for a fresh one after your resume or retry. A step
+// without one stays: a failed merge or delivery is sent again by your retry,
+// and an approval still waits for you. Null for an ended task.
+function rest(task: Task): Task | null {
   switch (task.phase) {
+    case "ended":
+      return null;
     case "triage":
-      return { ...task, step: { kind: "queued" } };
+      return withAgent(task.step.kind) ? { ...task, step: { kind: "queued" } } : task;
     case "build":
-      return { ...task, step: { kind: "queued" } };
+      return withAgent(task.step.kind) ? { ...task, step: { kind: "queued" } } : task;
     case "review":
-      return { ...task, step: { kind: "queued" } };
+      return withAgent(task.step.kind) ? { ...task, step: { kind: "queued" } } : task;
   }
+}
+
+// Steps that start, run or stop an agent, or make its workspace.
+function withAgent(kind: string): boolean {
+  return (
+    kind === "creating_workspace" ||
+    kind === "creating_copy" ||
+    kind === "starting" ||
+    kind === "running" ||
+    kind === "awaiting_stop"
+  );
 }
 
 // ---------------------------------------------------------------------------
