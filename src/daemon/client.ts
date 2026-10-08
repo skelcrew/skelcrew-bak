@@ -2,22 +2,39 @@
 // answer that carries the same id.
 
 import { Socket } from "node:net";
-import { type Call, encode, parseAnswer, type Result, VERSION } from "../protocol/protocol";
+import {
+  type Call,
+  encode,
+  MAX_LINE,
+  parseAnswer,
+  type Result,
+  VERSION,
+} from "../protocol/protocol";
 
 // `unreachable` says no daemon answers on the socket, so one can be started.
 export type Sent =
   | { ok: true; result: Result }
   | { ok: false; message: string; unreachable?: true };
 
-// `token` is the caller's session token. None means you.
-export function send(socket: string, call: Call, token: string | null = null): Promise<Sent> {
+// `token` is the caller's session token. None means you. The daemon answers
+// at once, so an answer that takes longer than `answerMs` is given up on.
+export function send(
+  socket: string,
+  call: Call,
+  token: string | null = null,
+  answerMs = 30_000,
+): Promise<Sent> {
   const id = crypto.randomUUID();
   return new Promise((resolve) => {
     let text = "";
     let settled = false;
+    const timer = setTimeout(() => {
+      finish({ ok: false, message: `The daemon didn't answer within ${answerMs / 1000} seconds.` });
+    }, answerMs);
     const finish = (sent: Sent) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       connection.destroy();
       resolve(sent);
     };
@@ -29,7 +46,12 @@ export function send(socket: string, call: Call, token: string | null = null): P
     connection.on("data", (chunk) => {
       text += chunk.toString();
       const end = text.indexOf("\n");
-      if (end < 0) return;
+      if (end < 0) {
+        if (Buffer.byteLength(text) > MAX_LINE) {
+          finish({ ok: false, message: `The answer is longer than ${MAX_LINE} bytes.` });
+        }
+        return;
+      }
       const parsed = parseAnswer(text.slice(0, end));
       if (!parsed.ok) return finish(parsed);
       const answer = parsed.value;
