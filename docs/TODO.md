@@ -77,5 +77,5 @@ A draft, for review before any of it is built. In order, each one usable by the 
 - [x] **Walkthrough test.** One task driven from `skel add` to delivered through the real
       socket, with a test standing in for each agent by its token. This is the milestone's
       "done when".
-- [ ] **Simulator: your inputs at random.** Pauses, kills, questions and answers, and tool
+- [x] **Simulator: your inputs at random.** Pauses, kills, questions and answers, and tool
       replies that arrive late, in the loop's property test.

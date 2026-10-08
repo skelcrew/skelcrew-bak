@@ -1,6 +1,7 @@
 // The loop's property test: several tasks through the real loop and store,
 // with replies from different tasks interleaved at random, saves that fail
-// at random, and restarts at random moments. The numbers in the comments
+// at random, restarts at random moments, and your pauses, kills, retries
+// and answers at random, so tools' replies also arrive late. The numbers in the comments
 // match the rules in docs/invariants.md tagged (loop).
 
 import { expect, test } from "bun:test";
@@ -11,16 +12,23 @@ import { Simulator } from "../sim/simulator";
 
 const tasks = [1, 2, 3, 4].map((n) => TaskId.parse(n));
 
-test("the loop keeps its rules through failed saves and restarts", () => {
+test("the loop keeps its rules through failed saves, restarts and your inputs", () => {
   fc.assert(
     fc.property(
       fc.integer(),
       fc.array(fc.boolean(), { minLength: 20, maxLength: 120 }),
       // Changes asked for per task, below the loop cap of 3, so each finishes.
       fc.array(fc.nat(1), { minLength: 4, maxLength: 4 }),
-      (seed, restarts, changes) => {
-        const sim = new Simulator({ ...config, maxRunning: 2 }, { seed, failSaves: 0.15 });
-        for (const [i, taskId] of tasks.entries()) sim.add(taskId, { changes: changes[i] ?? 0 });
+      // Questions each task's builder asks you.
+      fc.array(fc.nat(2), { minLength: 4, maxLength: 4 }),
+      (seed, restarts, changes, asks) => {
+        const sim = new Simulator(
+          { ...config, maxRunning: 2 },
+          { seed, failSaves: 0.15, yourInputs: 0.1 },
+        );
+        for (const [i, taskId] of tasks.entries()) {
+          sim.add(taskId, { changes: changes[i] ?? 0, asks: asks[i] ?? 0 });
+        }
 
         for (const restart of restarts) {
           // 17: a failed save changes nothing. The simulator checks it on
@@ -35,10 +43,12 @@ test("the loop keeps its rules through failed saves and restarts", () => {
         }
 
         // 16: every saved command is carried out once the daemon runs, so
-        // every task still finishes.
-        sim.calm();
-        sim.run();
-        for (const taskId of tasks) expect(sim.outcome(taskId)).toBe("done");
+        // every task still ends once you answer, resume and retry what waits
+        // on you. A kill ends one early.
+        sim.settle();
+        for (const taskId of tasks) expect(sim.outcome(taskId)).not.toBeNull();
+        expect(sim.mostAgentsAtOnce).toBeLessThanOrEqual(2);
+        expect(sim.tasksMatchTheLog()).toBe(true);
       },
     ),
     { numRuns: 150 },
