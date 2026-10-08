@@ -15,20 +15,28 @@ import type { Command, Config, Decision, Input, Task, TaskEvent, TaskId } from "
 import type { Loaded, Queued, Saved, SavedCommand } from "../store/store";
 
 // Carries out the core's commands: making workspaces, starting and stopping
-// sessions, merging. Replies come back later through Loop.send.
+// sessions, merging.
 //
-// A tool calls `finished` once the command's work is done. For a command that
-// expects a reply, that is once the reply has been sent to the loop. Until
-// then the command stays in the outbox, so if the daemon dies first, it goes
-// out again after the restart. So a tool may get a command twice, and doing
-// it twice must have the effect of doing it once.
+// Once a command's work is done, its tool calls `reply` with the reply, or
+// with null for a command that has none. The reply's events are saved in the
+// same transaction as the command leaving the outbox, so the two never come
+// apart. `reply` returns false when that save failed: the command stays in
+// the outbox, and the tool calls `reply` again later.
+//
+// If the daemon dies before a command's reply is saved, it goes out again
+// after the restart. So a tool may get a command twice, and doing it twice
+// must have the effect of doing it once.
 export interface Tools {
-  carryOut(command: Command, finished: () => void): void;
+  carryOut(command: Command, reply: Reply): void;
 }
+
+export type Reply = (input: Input | null) => boolean;
 
 // Where decisions are saved. The event store is the real one.
 export interface Log {
-  append(events: TaskEvent[], commands: Command[]): Queued;
+  // Saves a decision's events and commands, and drops the `done` commands
+  // from the outbox, all in one transaction.
+  append(events: TaskEvent[], commands: Command[], done?: number[]): Queued;
   carriedOut(id: number): Saved;
 }
 
@@ -44,14 +52,16 @@ export class Loop {
   // own, since a command without a log has no id.
   private readonly pending = new Map<number, Command>();
   private nextKey = 1;
+  private readonly now: () => number;
 
   constructor(
     private readonly config: Config,
     private readonly tools: Tools,
     private readonly log: Log,
-    tasks: Map<TaskId, Task> = new Map(),
+    options: { tasks?: Map<TaskId, Task>; now?: () => number } = {},
   ) {
-    this.tasks = tasks;
+    this.tasks = options.tasks ?? new Map();
+    this.now = options.now ?? Date.now;
   }
 
   // Picks up after a restart: every task rebuilt from the log, then every
@@ -63,6 +73,7 @@ export class Loop {
     config: Config,
     tools: Tools,
     log: ReadableLog,
+    now: () => number = Date.now,
   ): { ok: true; loop: Loop } | { ok: false; reason: string } {
     const tasks = log.loadTasks();
     if (!tasks.ok) return { ok: false, reason: `Event ${tasks.seq}: ${tasks.reason}` };
@@ -70,8 +81,8 @@ export class Loop {
     if (!unfinished.ok) {
       return { ok: false, reason: `Command ${unfinished.seq}: ${unfinished.reason}` };
     }
-    const loop = new Loop(config, tools, log, tasks.tasks);
-    for (const { id, command } of unfinished.commands) loop.carryOut(command, id);
+    const loop = new Loop(config, tools, log, { tasks: tasks.tasks, now });
+    loop.dispatch(unfinished.commands.map(({ id, command }) => ({ command, id })));
     return { ok: true, loop };
   }
 
@@ -102,37 +113,73 @@ export class Loop {
 
   // One input for one task, at the given time.
   send(taskId: TaskId, input: Input, at: number): Decision {
-    const before = this.task(taskId);
-    const decision = decide(before, { taskId, at, input }, this.config);
-    if (!decision.ok) return decision;
+    return this.handle(taskId, input, at, []).decision;
+  }
 
-    const saved = this.log.append(decision.events, decision.commands);
+  // Decides on one input, saves the decision with the commands it answers
+  // leaving the outbox, applies it, then hands its commands to the tools.
+  private handle(
+    taskId: TaskId,
+    input: Input,
+    at: number,
+    done: number[],
+  ): { decision: Decision; saved: boolean } {
+    const decision = decide(this.task(taskId), { taskId, at, input }, this.config);
+    if (!decision.ok) return { decision, saved: true };
+
+    const saved = this.log.append(decision.events, decision.commands, done);
     if (!saved.ok) {
       const reason = `The events couldn't be saved: ${saved.reason}`;
-      return { ok: false, rejection: { input: input.type, reason } };
+      return { decision: { ok: false, rejection: { input: input.type, reason } }, saved: false };
     }
 
     for (const event of decision.events) this.apply(event);
-    for (const [i, command] of decision.commands.entries()) this.carryOut(command, saved.ids[i]);
-    return decision;
+    this.dispatch(decision.commands.map((command, i) => ({ command, id: saved.ids[i] })));
+    return { decision, saved: true };
+  }
+
+  // Hands commands to the tools.
+  private dispatch(commands: { command: Command; id: number | undefined }[]): void {
+    for (const { command, id } of commands) this.carryOut(command, id, this.track(command));
+  }
+
+  private track(command: Command): number {
+    const key = this.nextKey++;
+    this.pending.set(key, command);
+    return key;
   }
 
   // Hands one command to the tools. It stays pending, and in the outbox,
   // until its tool says it has finished. Typing into a session is the
   // exception: it leaves the outbox before it is typed, so a crash in between
   // loses the message rather than typing it twice.
-  private carryOut(command: Command, id: number | undefined): void {
+  private carryOut(command: Command, id: number | undefined, key: number): void {
     if (command.type === "type_into_session") {
-      if (id !== undefined) this.log.carriedOut(id);
-      this.tools.carryOut(command, () => {});
-      return;
-    }
-    const key = this.nextKey++;
-    this.pending.set(key, command);
-    this.tools.carryOut(command, () => {
       this.pending.delete(key);
       if (id !== undefined) this.log.carriedOut(id);
+      this.tools.carryOut(command, () => true);
+      return;
+    }
+    this.tools.carryOut(command, (input) => {
+      if (!this.pending.has(key)) return true; // answered already
+      const answered = this.answer(command, input, id);
+      if (answered) this.pending.delete(key);
+      return answered;
     });
+  }
+
+  // A tool's reply to a command: saved with the command leaving the outbox,
+  // or for a reply the core refuses, the command just leaves. False when a
+  // save failed, so the tool replies again later.
+  private answer(command: Command, input: Input | null, id: number | undefined): boolean {
+    const done = id === undefined ? [] : [id];
+    if (input === null || !("taskId" in command)) {
+      return id === undefined || this.log.carriedOut(id).ok;
+    }
+    const handled = this.handle(command.taskId, input, this.now(), done);
+    if (!handled.saved) return false;
+    if (!handled.decision.ok && id !== undefined) return this.log.carriedOut(id).ok;
+    return true;
   }
 
   // decide never produces an event evolve refuses. If it ever does, that is a

@@ -16,7 +16,7 @@
 
 import { CommitSha, SessionId } from "../core/ids";
 import type { Command, Config, Delivered, Input, Intent, TaskEvent, TaskId } from "../core/types";
-import { Loop, type ReadableLog, type Tools } from "../loop/loop";
+import { Loop, type ReadableLog, type Reply, type Tools } from "../loop/loop";
 import { EventStore } from "../store/store";
 
 // What goes wrong for one task. Anything left out goes well.
@@ -26,9 +26,12 @@ export type Behaviour = {
   conflicts?: number; // how many times merging main conflicts
 };
 
-// Something waiting to reach the loop: a tool's reply, which finishes its
-// command once sent, or an agent's next report.
-type Job = { taskId: TaskId; input: Input; finished?: () => void; agent: boolean };
+// Something waiting to reach the loop: a tool's reply to a command, handed
+// to the loop's reply function, or an agent's next report, sent as an input.
+type Job =
+  // A command with no task, such as removing a workspace, has a null task.
+  | { kind: "reply"; taskId: TaskId | null; input: Input | null; reply: Reply }
+  | { kind: "agent"; taskId: TaskId; input: Input };
 
 export type Options = {
   seed?: number; // interleaves tasks' replies at random
@@ -60,7 +63,7 @@ export class Simulator {
     this.random = options.seed === undefined ? null : mulberry32(options.seed);
     this.failSaves = options.failSaves ?? 0;
     this.log = this.flaky();
-    this.loop = new Loop(config, this.tools(), this.log);
+    this.loop = new Loop(config, this.tools(), this.log, { now: () => this.tick() });
   }
 
   // No more failed saves, so a run can finish.
@@ -108,11 +111,7 @@ export class Simulator {
       }
       const job = this.next();
       if (job === undefined) continue;
-      if (!this.send(job.taskId, job.input)) {
-        this.queue.unshift(job); // the daemon sends a lost reply again
-        continue;
-      }
-      job.finished?.();
+      if (!this.deliver(job)) this.queue.unshift(job); // sent again, as the daemon does
     }
   }
 
@@ -126,30 +125,37 @@ export class Simulator {
     return i < 0 ? undefined : this.queue.splice(i, 1)[0];
   }
 
-  // Sends one input. False if its save failed, after checking it changed
-  // nothing and sent nothing (rule 17).
-  private send(taskId: TaskId, input: Input): boolean {
-    const before = this.loop.task(taskId);
+  // Hands a job to the loop. False if its save failed, after checking it
+  // changed nothing and sent nothing (rule 17).
+  private deliver(job: Job): boolean {
+    const before = job.taskId === null ? null : this.loop.task(job.taskId);
     const handed = this.handed;
     this.saveFailed = false;
-    this.loop.send(taskId, input, this.tick());
+    if (job.kind === "reply") job.reply(job.input);
+    else this.loop.send(job.taskId, job.input, this.tick());
     if (!this.saveFailed) return true;
-    if (!Bun.deepEquals(this.loop.task(taskId), before) || this.handed !== handed) {
-      throw new Error(`A failed save changed #${taskId}, or sent a command.`);
+    const after = job.taskId === null ? null : this.loop.task(job.taskId);
+    if (!Bun.deepEquals(after, before) || this.handed !== handed) {
+      throw new Error(`A failed save changed #${job.taskId}, or sent a command.`);
     }
     return false;
+  }
+
+  // Sends one input of yours. False if its save failed.
+  private send(taskId: TaskId, input: Input): boolean {
+    return this.deliver({ kind: "agent", taskId, input });
   }
 
   // The store, with saves that fail at random.
   private flaky(): ReadableLog {
     const store = this.store;
     return {
-      append: (events: TaskEvent[], commands: Command[]) => {
+      append: (events: TaskEvent[], commands: Command[], done?: number[]) => {
         if (this.random !== null && this.random() < this.failSaves) {
           this.saveFailed = true;
           return { ok: false, reason: "a simulated failure" };
         }
-        return store.append(events, commands);
+        return store.append(events, commands, done);
       },
       carriedOut: (id: number) => store.carriedOut(id),
       loadTasks: () => store.loadTasks(),
@@ -161,9 +167,9 @@ export class Simulator {
   // reopened loop sends it again from the outbox. Agents keep running, as
   // they do in tmux, so their next reports still arrive.
   restart(): void {
-    const agents = this.queue.filter((job) => job.agent);
+    const agents = this.queue.filter((job) => job.kind === "agent");
     this.queue = [];
-    const opened = Loop.open(this.config, this.tools(), this.log);
+    const opened = Loop.open(this.config, this.tools(), this.log, () => this.tick());
     if (!opened.ok) throw new Error(opened.reason);
     this.loop = opened.loop;
     // Replies sent again go first, so an agent's report still comes after
@@ -188,16 +194,18 @@ export class Simulator {
   // ---------------------------------------------------------------------------
 
   private tools(): Tools {
-    return { carryOut: (command, finished) => this.carryOut(command, finished) };
+    return { carryOut: (command, reply) => this.carryOut(command, reply) };
   }
 
-  // The reply goes first, so a new agent's report arrives after its start.
-  private carryOut(command: Command, finished: () => void): void {
+  // Queues the command's reply, handed to the loop later, never from in
+  // here. The reply goes first, so a new agent's report arrives after its
+  // start.
+  private carryOut(command: Command, reply: Reply): void {
     this.handed++;
     if (command.type === "stop_session") this.live.delete(command.session);
-    const reply = this.replyTo(command);
-    if (reply === null) finished();
-    else this.queue.push({ taskId: reply.taskId, input: reply.input, finished, agent: false });
+    const answer = this.replyTo(command);
+    const taskId = "taskId" in command ? command.taskId : null;
+    this.queue.push({ kind: "reply", taskId, input: answer?.input ?? null, reply });
     if (command.type === "start_session") this.startAgent(command);
   }
 
@@ -324,7 +332,7 @@ export class Simulator {
     this.live.add(session);
     this.mostAgentsAtOnce = Math.max(this.mostAgentsAtOnce, this.live.size);
     const next = this.agent(command.taskId, command.role, session);
-    this.queue.push({ taskId: command.taskId, input: next, agent: true });
+    this.queue.push({ kind: "agent", taskId: command.taskId, input: next });
   }
 
   // ---------------------------------------------------------------------------

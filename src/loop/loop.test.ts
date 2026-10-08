@@ -14,7 +14,7 @@ import {
 } from "../core/testing";
 import type { Command } from "../core/types";
 import { EventStore } from "../store/store";
-import { type Log, Loop, type ReadableLog, type Tools } from "./loop";
+import { type Log, Loop, type ReadableLog, type Reply, type Tools } from "./loop";
 
 // Tools that only remember what they were handed.
 function recording(): Tools & { handed: Command[] } {
@@ -75,20 +75,70 @@ describe("sending an input", () => {
   });
 });
 
-describe("a command carried out", () => {
-  test("is forgotten by the outbox once its tool says it has finished", () => {
+// Tools that keep each command's reply function, to reply when a test says.
+function replying(): Tools & { replies: Map<string, Reply> } {
+  const replies = new Map<string, Reply>();
+  return {
+    replies,
+    carryOut: (command, reply) => {
+      const task = "taskId" in command ? command.taskId : 0;
+      replies.set(`${task}:${command.type}`, reply);
+    },
+  };
+}
+
+function outboxTypes(store: EventStore): string[] {
+  const saved = store.loadCommands();
+  if (!saved.ok) throw new Error(saved.reason);
+  return saved.commands.map(({ command }) => command.type);
+}
+
+describe("a tool's reply", () => {
+  test("is saved together with its command leaving the outbox", () => {
     const store = EventStore.open(":memory:");
-    let finish = () => {};
-    const tools: Tools = { carryOut: (_command, finished) => (finish = finished) };
+    const tools = replying();
     const loop = new Loop(config, tools, store);
     loop.send(id, add(), 1_000);
     loop.send(id, start, 2_000);
 
-    expect(store.loadCommands().ok && store.loadCommands()).toMatchObject({
-      commands: [{ id: 1 }],
-    });
-    finish();
-    expect(store.loadCommands()).toEqual({ ok: true, commands: [] });
+    expect(tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1))).toBe(true);
+    expect(loop.task(id)?.phase === "triage" && loop.task(id)?.requests).toBe(2);
+    expect(outboxTypes(store)).toEqual(["start_session"]);
+  });
+
+  test("whose save fails keeps its command in the outbox, and says so", () => {
+    const store = EventStore.open(":memory:");
+    let failing = false;
+    const log: Log = {
+      append: (events, commands, done) =>
+        failing ? { ok: false, reason: "disk full" } : store.append(events, commands, done),
+      carriedOut: (commandId) => store.carriedOut(commandId),
+    };
+    const tools = replying();
+    const loop = new Loop(config, tools, log);
+    loop.send(id, add(), 1_000);
+    loop.send(id, start, 2_000);
+    const reply = tools.replies.get(`${id}:create_workspace`);
+
+    failing = true;
+    expect(reply?.(workspaceCreated(1))).toBe(false);
+    expect(outboxTypes(store)).toEqual(["create_workspace"]);
+
+    failing = false;
+    expect(reply?.(workspaceCreated(1))).toBe(true);
+    expect(outboxTypes(store)).toEqual(["start_session"]);
+  });
+
+  test("that comes too late still lets its command go", () => {
+    const store = EventStore.open(":memory:");
+    const tools = replying();
+    const loop = new Loop(config, tools, store);
+    loop.send(id, add(), 1_000);
+    loop.send(id, start, 2_000);
+    loop.send(id, kill, 3_000);
+
+    expect(tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1))).toBe(true);
+    expect(outboxTypes(store)).toEqual(["remove_workspace"]);
   });
 });
 
@@ -107,9 +157,8 @@ describe("starting what waits", () => {
     expect(loop.startWaiting(11)).toEqual([]);
   });
 
-  test("keeps the slot of a start sent for a task that was killed, until its tool finishes", () => {
-    const finishes: (() => void)[] = [];
-    const tools: Tools = { carryOut: (_command, finished) => finishes.push(finished) };
+  test("keeps the slot of a start sent for a task that was killed, until its tool replies", () => {
+    const tools = replying();
     const loop = threeQueued(tools);
     loop.startWaiting(10);
     loop.send(TaskId.parse(1), kill, 11);
@@ -117,7 +166,7 @@ describe("starting what waits", () => {
     expect(loop.inFlight).toBe(1);
     expect(loop.startWaiting(12)).toEqual([]);
 
-    for (const finish of finishes) finish();
+    tools.replies.get("1:create_workspace")?.(workspaceCreated(1));
     expect(loop.inFlight).toBe(0);
     expect(loop.startWaiting(13)).toEqual([TaskId.parse(3)]);
   });
@@ -138,14 +187,16 @@ describe("reopening after a restart", () => {
     expect(tools.handed).toEqual([{ type: "create_workspace", taskId: id, request: 1 }]);
   });
 
-  test("forgets a resent command once its tool finishes", () => {
+  test("forgets a resent command once its tool replies", () => {
     const store = EventStore.open(":memory:");
     const before = new Loop(config, { carryOut: () => {} }, store);
     before.send(id, add(), 1_000);
     before.send(id, start, 2_000);
 
-    Loop.open(config, { carryOut: (_command, finished) => finished() }, store);
-    expect(store.loadCommands()).toEqual({ ok: true, commands: [] });
+    const tools = replying();
+    Loop.open(config, tools, store);
+    tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1));
+    expect(outboxTypes(store)).toEqual(["start_session"]);
   });
 
   test("still counts the slot of a start sent for a task killed before the restart", () => {
