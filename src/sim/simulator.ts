@@ -52,16 +52,20 @@ type Job =
 export type Options = {
   seed?: number; // interleaves tasks' replies at random
   failSaves?: number; // the chance that a save fails, from 0 to 1
+  yourInputs?: number; // the chance, each step, that you send a task something
 };
 
 export class Simulator {
   // The most agents ever live at once, from their start to their stop.
   mostAgentsAtOnce = 0;
+  // The type of each input you sent at random, in order.
+  readonly sentByYou: string[] = [];
 
   private readonly store = EventStore.open(":memory:");
   private readonly log: ReadableLog;
   private readonly random: (() => number) | null;
   private failSaves: number;
+  private yourInputs: number;
   private saveFailed = false;
   private handed = 0;
   private loop: Loop;
@@ -88,6 +92,7 @@ export class Simulator {
   ) {
     this.random = options.seed === undefined ? null : mulberry32(options.seed);
     this.failSaves = options.failSaves ?? 0;
+    this.yourInputs = options.yourInputs ?? 0;
     this.log = this.flaky();
     this.loop = new Loop(config, this.tools(), this.log, { now: () => this.tick() });
   }
@@ -134,6 +139,7 @@ export class Simulator {
   // nothing waits, the loop starts what the scheduler picks.
   run(limit: { steps?: number } = {}): void {
     for (let step = 0; step < (limit.steps ?? 10_000); step++) {
+      if (this.random !== null && this.random() < this.yourInputs) this.you(this.random);
       // Nothing waits: start what the scheduler picks, each through the same
       // checks as any other input. Stop when it picks nothing.
       if (this.queue.length === 0) {
@@ -150,6 +156,27 @@ export class Simulator {
       // unsaved beside it, and each failed retry is checked on its own.
       else while (!this.deliver({ ...job, retry: true })) {}
     }
+  }
+
+  // You send a task something, at once, ahead of anything queued for it. So a
+  // tool's reply already queued arrives late, after a pause or kill. Never
+  // `start`, which may start past max_running, as the spec allows.
+  private you(random: () => number): void {
+    const open = this.loop.all().filter((task) => task.phase !== "ended");
+    const task = open[Math.floor(random() * open.length)];
+    if (task === undefined) return;
+    // An open question gets an answer half the time. Otherwise a kill is
+    // rare, so most tasks live long enough for the rest.
+    const input: Input =
+      task.question !== null && random() < 0.5
+        ? { by: "you", type: "reply", text: "Yes." }
+        : (weighted(random(), [
+            [0.1, { by: "you", type: "kill" }],
+            [0.2, { by: "you", type: "retry" }],
+            [0.3, { by: "you", type: "pause" }],
+          ]) ?? { by: "you", type: "resume" });
+    this.sentByYou.push(input.type);
+    this.send(task.id, input);
   }
 
   // The next job: the oldest, or with a seed, the oldest of a task picked at
@@ -239,6 +266,7 @@ export class Simulator {
   // answered, paused task resumed and held one retried, until all have ended.
   settle(): void {
     this.calm();
+    this.yourInputs = 0;
     for (let round = 0; round < 100; round++) {
       const open = this.loop.all().filter((task) => task.phase !== "ended");
       if (open.length === 0) return;
@@ -381,6 +409,17 @@ export class Simulator {
     this.now += 1_000;
     return this.now;
   }
+}
+
+// The first choice whose share, added to those before it, passes `roll`, or
+// null when none does.
+function weighted<T>(roll: number, choices: [number, T][]): T | null {
+  let total = 0;
+  for (const [share, choice] of choices) {
+    total += share;
+    if (roll < total) return choice;
+  }
+  return null;
 }
 
 // A small seeded random source, so a failing run can be replayed.

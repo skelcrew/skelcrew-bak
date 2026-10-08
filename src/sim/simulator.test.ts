@@ -89,3 +89,20 @@ describe("a builder that asks", () => {
     expect(sim.mostAgentsAtOnce).toBe(1);
   });
 });
+
+describe("your inputs at random", () => {
+  test("pause, resume, retry, kill and reply, and every task still ends", () => {
+    const sent = new Set<string>();
+    for (let seed = 1; seed <= 20; seed++) {
+      const sim = new Simulator({ ...config, maxRunning: 2 }, { seed, yourInputs: 0.3 });
+      for (const n of [1, 2, 3, 4]) sim.add(task(n), { asks: 2, changes: 1 });
+      sim.run();
+      for (const input of sim.sentByYou) sent.add(input);
+      sim.settle();
+
+      for (const n of [1, 2, 3, 4]) expect(sim.outcome(task(n))).not.toBeNull();
+      expect(sim.mostAgentsAtOnce).toBeLessThanOrEqual(2);
+    }
+    expect(sent).toEqual(new Set(["pause", "resume", "retry", "kill", "reply"]));
+  });
+});
