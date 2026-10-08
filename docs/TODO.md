@@ -19,7 +19,7 @@ split into tasks here.
       the rule in `AGENTS.md` for when it may be regenerated.
 - [x] **Outbox.** Commands saved with the events that caused them, in one transaction, and
       marked done when their tool finishes.
-- [ ] **Loop.** Decide, save, evolve, carry out. A failed save changes nothing. The count of
+- [x] **Loop.** Decide, save, evolve, carry out. A failed save changes nothing. The count of
       starts and stops the tasks no longer record, for the scheduler.
 - [ ] **Reopening.** Rebuild every task from the log, resend unfinished commands, and restore
       the count of starts in flight.
