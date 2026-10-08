@@ -208,7 +208,11 @@ export type Source =
 // own, since they would swamp the rest. Usage is shown, never enforced.
 export type SessionUsage = { tokens: number; cacheReads: number; workingMs: number };
 
-export type Task = PhaseState & {
+export type Task = PhaseState & TaskBase;
+
+// The fields every task has, whatever its phase. A move to another phase is
+// built from these plus the new phase's own.
+export type TaskBase = {
   id: TaskId;
   source: Source;
   title: string;
@@ -348,7 +352,9 @@ export type EventBody =
       title: string;
       description: string | null;
       source: Source;
-      plan: AddPlan | null;
+      // Set when you gave intent and rigor, so triage is skipped. decide
+      // writes the brief here, so evolve only applies it.
+      plan: Plan | null;
     }
   | { type: "task.triaged"; outcome: "proceed"; plan: Plan }
   | {
