@@ -29,9 +29,9 @@ approval, or one held for any reason but a pause.
 | Phase | Holds |
 |---|---|
 | triage | the workspace and the planner's session, once they exist |
-| build | intent, rigor, approval flag, brief, spec path, the workspace, the builder's session, the loop count |
-| review | everything build holds, plus the reviewed commit, the task's changed files, and the tester's copy and session |
-| ended | the outcome (done, split, declined, killed, failed), what was handed over, and any proposals with your decisions on them |
+| build | intent, rigor, approval flag, brief, spec path, the workspace, the builder's session, the loop count, and what was handed over |
+| review | everything build holds, plus the reviewed commit, the task's changed files, the tester's copy and session, and the evidence once review passes |
+| ended | the outcome (done, split, declined, killed, failed), what was handed over, any proposals with your decisions on them, and a workspace whose work couldn't be saved |
 
 Every task also holds its ID, source and source ID, title, request counter and usage.
 
@@ -66,6 +66,8 @@ its text in the event.
 2. **creating workspace** (request): the worktree and branch are being made.
 3. **starting** (request): the planner's session is starting.
 4. **running** (session): the planner works.
+5. **committing spec** (request): only when the planner proceeds with a spec. Skelcrew commits
+   it to the branch, since the planner has no edit permission.
 
 Triage ends with one of:
 
@@ -254,9 +256,10 @@ a reply has a success reply and a failure reply.
 | remove workspace | none |
 | start session (role, workspace, brief, findings or answer to pass on) | started, failed, and later ended |
 | stop session (save work or not) | stopped: saved, nothing to save, or save failed |
+| commit spec | committed with its path, failed |
 | type into session | none |
 | merge main | merged with the commit and changed files, conflict, failed |
-| deliver output (the reviewed commit, or the report) | delivered, failed |
+| deliver output (the reviewed commit, the summary or report, and the evidence) | delivered, failed |
 
 **No retries.** A failure reply holds the task with what happened. You retry it with
 `skel retry`.

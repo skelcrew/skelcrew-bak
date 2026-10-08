@@ -88,7 +88,7 @@ export type Hold =
   | { kind: "loop_cap"; findings: string }
   | {
       kind: "failed";
-      step: "workspace" | "session" | "merge_main" | "save" | "delivery";
+      step: "workspace" | "session" | "spec" | "merge_main" | "save" | "delivery";
       message: string;
     };
 
@@ -107,7 +107,10 @@ export type TriageStep =
   | { kind: "queued" }
   | { kind: "creating_workspace"; request: number }
   | { kind: "starting"; request: number }
-  | { kind: "running"; session: SessionId };
+  | { kind: "running"; session: SessionId }
+  // The planner proceeded with a spec, and Skelcrew is committing it to the
+  // branch. The planner can't, since it has no edit permission.
+  | { kind: "committing_spec"; request: number; plan: Plan };
 
 export type BuildStep =
   | { kind: "queued" }
@@ -121,8 +124,8 @@ export type BuildStep =
 
 export type ReviewStep =
   | { kind: "creating_copy"; request: number }
-  | { kind: "starting"; request: number; copy: TesterCopy }
-  | { kind: "running"; session: SessionId; copy: TesterCopy }
+  | { kind: "starting"; request: number }
+  | { kind: "running"; session: SessionId }
   | Finishing;
 
 // The last steps of whichever phase ran last. No agent runs in either.
@@ -143,7 +146,7 @@ export type PhaseState =
       step: TriageStep;
       // What you set while the planner works. It wins over the planner's
       // call for that field.
-      override: { intent: Intent | null; rigor: Rigor | null };
+      override: { intent: Intent | null; rigor: Rigor | null; approve: boolean | null };
     }
   | {
       phase: "build";
@@ -152,6 +155,7 @@ export type PhaseState =
       step: BuildStep;
       loops: number;
       feedback: Feedback | null;
+      handover: Handover | null; // set at `done`
       reviewed: Reviewed | null; // set once main is merged, for `try`
     }
   | {
@@ -160,13 +164,27 @@ export type PhaseState =
       workspace: Workspace;
       step: ReviewStep;
       loops: number;
+      handover: Handover;
       reviewed: Reviewed;
+      // On the phase, not the step, so it stays tracked until it is removed,
+      // even after the verdict.
+      copy: TesterCopy | null;
+      evidence: string | null; // set when review passes
     }
   | {
       phase: "ended";
       outcome: Outcome;
       proposals: Proposal[];
+      // A workspace whose work couldn't be saved is never removed.
+      kept: Workspace | null;
     };
+
+// What the builder handed over: a summary of the change, or for `answer` a
+// report and any tasks it proposes. Kept until delivery, so a restart loses
+// nothing.
+export type Handover =
+  | { kind: "summary"; text: string }
+  | { kind: "report"; text: string; proposals: { title: string; description: string }[] };
 
 export type Outcome =
   | { kind: "done"; delivered: Delivered }
@@ -291,6 +309,8 @@ export type PluginInput =
       saved: "saved" | "nothing_to_save" | "save_failed";
       message: string;
     }
+  | { type: "spec_committed"; request: number; path: string }
+  | { type: "spec_failed"; request: number; message: string }
   | { type: "main_merged"; request: number; reviewed: Reviewed }
   | { type: "main_conflict"; request: number; files: string[] }
   | { type: "main_failed"; request: number; message: string }
@@ -362,15 +382,17 @@ export type EventBody =
   | { type: "task.held"; hold: Hold }
   | { type: "task.released" } // your resume or retry lifts the hold
   | { type: "task.started_now" }
-  | { type: "build.done"; branch: BranchFacts; summary: string }
+  | { type: "build.done"; branch: BranchFacts; handover: Handover }
+  | { type: "spec.requested"; request: number; text: string }
+  | { type: "spec.committed"; path: string }
   | { type: "main.requested"; request: number }
   | { type: "main.merged"; reviewed: Reviewed }
   | { type: "main.conflict"; files: string[] }
   | { type: "main.failed"; message: string }
-  | { type: "review.passed"; evidence: string }
+  | { type: "review.passed"; commit: CommitSha; evidence: string }
   | { type: "review.changes_requested"; findings: string }
   | { type: "approval.requested"; criticalFiles: string[] }
-  | { type: "approval.given" }
+  | { type: "approval.given"; commit: CommitSha }
   | { type: "approval.denied"; note: string }
   | { type: "output.requested"; request: number }
   | { type: "output.delivered"; delivered: Delivered }
@@ -408,6 +430,13 @@ export type Command =
   | { type: "stop_session"; taskId: TaskId; request: number; session: SessionId; save: boolean }
   // Sent at most once: recorded before it is typed, never repeated.
   | { type: "type_into_session"; session: SessionId; text: string }
+  | {
+      type: "commit_spec";
+      taskId: TaskId;
+      request: number;
+      workspace: Workspace;
+      text: string;
+    }
   | { type: "merge_main"; taskId: TaskId; request: number; workspace: Workspace }
   | {
       type: "deliver";
@@ -415,6 +444,7 @@ export type Command =
       request: number;
       intent: Intent;
       reviewed: Reviewed;
+      handover: Handover;
       evidence: string | null;
     };
 
