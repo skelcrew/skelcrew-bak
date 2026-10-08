@@ -68,10 +68,10 @@ export class EventStore {
     this.db.close();
   }
 
-  // Saves one decision's events and commands together, and drops the `done`
+  // Saves one decision's events and commands together, and drops the
   // commands it answers from the outbox: all of it, or none if anything fails
   // its schema. Returns each new command's id, to mark it carried out later.
-  append(events: TaskEvent[], commands: Command[] = [], done: number[] = []): Queued {
+  append(events: TaskEvent[], commands: Command[] = [], answered: number[] = []): Queued {
     for (const event of events) {
       const parsed = parseTaskEvent(readJson(JSON.stringify(event)));
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
@@ -92,7 +92,7 @@ export class EventStore {
         for (const event of events) {
           insert.run({ task: event.taskId, body: JSON.stringify(event) });
         }
-        for (const id of done) remove.run({ id });
+        for (const id of answered) remove.run({ id });
         return commands.map((command) => {
           const row = queue.get({ body: JSON.stringify(command) });
           if (row === null) throw new Error("SQLite returned no id for a saved command.");

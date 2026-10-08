@@ -110,8 +110,8 @@ describe("a tool's reply", () => {
     const store = EventStore.open(":memory:");
     let failing = false;
     const log: Log = {
-      append: (events, commands, done) =>
-        failing ? { ok: false, reason: "disk full" } : store.append(events, commands, done),
+      append: (events, commands, answered) =>
+        failing ? { ok: false, reason: "disk full" } : store.append(events, commands, answered),
       carriedOut: (commandId) => store.carriedOut(commandId),
     };
     const tools = replying();
@@ -295,7 +295,7 @@ describe("typing, when the outbox can't let it go", () => {
 
     const typed: string[] = [];
     const stuck: Log = {
-      append: (events, commands, done) => store.append(events, commands, done),
+      append: (events, commands, answered) => store.append(events, commands, answered),
       carriedOut: () => ({ ok: false, reason: "disk full" }),
     };
     const tools: Tools = {

@@ -37,9 +37,9 @@ export type Reply = (input: Input | null) => boolean;
 
 // Where decisions are saved. The event store is the real one.
 export interface Log {
-  // Saves a decision's events and commands, and drops the `done` commands
-  // from the outbox, all in one transaction.
-  append(events: TaskEvent[], commands: Command[], done?: number[]): Queued;
+  // Saves a decision's events and commands, and drops the commands it
+  // answers from the outbox, all in one transaction.
+  append(events: TaskEvent[], commands: Command[], answered?: number[]): Queued;
   carriedOut(id: number): Saved;
 }
 
@@ -139,16 +139,19 @@ export class Loop {
     taskId: TaskId,
     input: Input,
     at: number,
-    done: number[],
-  ): { decision: Decision; saved: boolean } {
+    answered: number[],
+  ): { decision: Decision; saveFailed: boolean } {
     if (this.busy) throw new Error("A tool replied from inside carryOut. Reply later instead.");
     const decision = decide(this.task(taskId), { taskId, at, input }, this.config);
-    if (!decision.ok) return { decision, saved: true };
+    if (!decision.ok) return { decision, saveFailed: false };
 
-    const saved = this.log.append(decision.events, decision.commands, done);
+    const saved = this.log.append(decision.events, decision.commands, answered);
     if (!saved.ok) {
       const reason = `The events couldn't be saved: ${saved.reason}`;
-      return { decision: { ok: false, rejection: { input: input.type, reason } }, saved: false };
+      return {
+        decision: { ok: false, rejection: { input: input.type, reason } },
+        saveFailed: true,
+      };
     }
 
     for (const event of decision.events) this.apply(event);
@@ -159,7 +162,7 @@ export class Loop {
         return { command, id };
       }),
     );
-    return { decision, saved: true };
+    return { decision, saveFailed: false };
   }
 
   // Hands commands to the tools. Every one is counted as pending before the
@@ -201,7 +204,7 @@ export class Loop {
   private answer(command: Command, input: Input | null, id: number): boolean {
     if (input === null || !("taskId" in command)) return this.log.carriedOut(id).ok;
     const handled = this.handle(command.taskId, input, this.now(), [id]);
-    if (!handled.saved) return false;
+    if (handled.saveFailed) return false;
     if (!handled.decision.ok) return this.log.carriedOut(id).ok;
     return true;
   }

@@ -174,12 +174,12 @@ export class Simulator {
   private flaky(): ReadableLog {
     const store = this.store;
     return {
-      append: (events: TaskEvent[], commands: Command[], done?: number[]) => {
+      append: (events: TaskEvent[], commands: Command[], answered?: number[]) => {
         if (this.random !== null && this.random() < this.failSaves) {
           this.saveFailed = true;
           return { ok: false, reason: "a simulated failure" };
         }
-        return store.append(events, commands, done);
+        return store.append(events, commands, answered);
       },
       carriedOut: (id: number) => store.carriedOut(id),
       loadTasks: () => store.loadTasks(),
