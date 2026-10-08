@@ -32,8 +32,8 @@ import type {
 // The shapes events carry
 // ---------------------------------------------------------------------------
 
-const intent = z.enum(["ship", "try", "answer"]);
-const rigor = z.enum(["light", "full"]);
+export const intent = z.enum(["ship", "try", "answer"]);
+export const rigor = z.enum(["light", "full"]);
 
 const plan: z.ZodType<Plan> = z.strictObject({
   intent,
@@ -60,7 +60,7 @@ const branchFacts: z.ZodType<BranchFacts> = z.strictObject({
   changedFiles: z.array(z.string()),
 });
 
-const proposal = z.strictObject({ title: z.string(), description: z.string() });
+export const proposal = z.strictObject({ title: z.string(), description: z.string() });
 
 const question: z.ZodType<Question> = z.strictObject({
   session: SessionId,
