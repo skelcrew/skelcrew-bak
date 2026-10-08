@@ -79,11 +79,11 @@ export type WireInput = z.infer<typeof input>;
 
 // Every input of yours but attach and detach, and every agent input, has a
 // shape here. A new input in the core fails to compile until it gets one.
-type Sent = WireInput["type"];
+type Covered = WireInput["type"];
 type Later = "attach" | "detach";
 const everyInputIsSent: Exclude<
   Exclude<YourInput["type"], Later> | AgentInput["type"],
-  Sent
+  Covered
 > extends never
   ? true
   : false = true;

@@ -8,6 +8,7 @@ import type { Loop } from "../loop/loop";
 import {
   type Answer,
   type Call,
+  encode,
   parseRequest,
   type Result,
   type Row,
@@ -34,7 +35,7 @@ export function answerLine(context: Context, line: string): string {
   const answer: Answer = handled.ok
     ? { v: VERSION, id, ok: true, result: handled.result }
     : { v: VERSION, id, ok: false, message: handled.message };
-  return `${JSON.stringify(answer)}\n`;
+  return encode(answer);
 }
 
 // The id a request that can't be read still carries, so its refusal reaches
@@ -158,7 +159,8 @@ function yours(input: WireInput): YourInput | null {
 }
 
 function nextId(loop: Loop): TaskId {
-  const highest = Math.max(0, ...loop.all().map((task) => task.id));
+  let highest = 0;
+  for (const task of loop.all()) highest = Math.max(highest, task.id);
   return TaskId.parse(highest + 1);
 }
 
