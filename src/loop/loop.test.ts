@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { TaskId } from "../core/ids";
-import { add, config, id, kill, start } from "../core/testing";
+import {
+  add,
+  ask,
+  config,
+  id,
+  kill,
+  planner,
+  reply,
+  sessionStarted,
+  start,
+  workspaceCreated,
+} from "../core/testing";
 import type { Command } from "../core/types";
 import { EventStore } from "../store/store";
 import { type Log, Loop, type ReadableLog, type Tools } from "./loop";
@@ -158,5 +169,39 @@ describe("reopening after a restart", () => {
     const opened = Loop.open(config, recording(), damaged);
 
     expect(opened).toEqual({ ok: false, reason: "Event 7: not JSON" });
+  });
+});
+
+describe("typing into a session", () => {
+  test("is marked carried out before it is typed, so a crash never types it twice", () => {
+    const store = EventStore.open(":memory:");
+    const loop = new Loop(config, { carryOut: () => {} }, store);
+    for (const input of [
+      add(),
+      start,
+      workspaceCreated(1),
+      sessionStarted(2, planner),
+      ask(planner),
+      reply("Yes"),
+    ]) {
+      loop.send(id, input, 1_000);
+    }
+
+    // How many typing commands the outbox still held while each was typed.
+    const outboxWhileTyping: number[] = [];
+    const typing: Tools = {
+      carryOut: (command) => {
+        if (command.type !== "type_into_session") return;
+        const saved = store.loadCommands();
+        if (!saved.ok) throw new Error(saved.reason);
+        const left = saved.commands.filter((c) => c.command.type === "type_into_session");
+        outboxWhileTyping.push(left.length);
+      },
+    };
+    const reopened = Loop.open(config, typing, store);
+    if (!reopened.ok) throw new Error(reopened.reason);
+    reopened.loop.send(id, { by: "daemon", type: "deliver_answer" }, 2_000);
+
+    expect(outboxWhileTyping).toEqual([0]);
   });
 });

@@ -118,8 +118,15 @@ export class Loop {
   }
 
   // Hands one command to the tools. It stays pending, and in the outbox,
-  // until its tool says it has finished.
+  // until its tool says it has finished. Typing into a session is the
+  // exception: it leaves the outbox before it is typed, so a crash in between
+  // loses the message rather than typing it twice.
   private carryOut(command: Command, id: number | undefined): void {
+    if (command.type === "type_into_session") {
+      if (id !== undefined) this.log.carriedOut(id);
+      this.tools.carryOut(command, () => {});
+      return;
+    }
     const key = this.nextKey++;
     this.pending.set(key, command);
     this.tools.carryOut(command, () => {
