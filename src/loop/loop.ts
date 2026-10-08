@@ -199,8 +199,8 @@ export class Loop {
   private carryOut(command: Command, id: number): void {
     if (command.type === "type_into_session") {
       this.pending.delete(id);
-      // If it can't leave the outbox, it isn't typed: a restart would type
-      // it again. The message is lost instead, as the spec allows.
+      // If it can't leave the outbox, it isn't typed now, or a restart would
+      // type it a second time. The restart types it instead, once.
       if (!this.log.carriedOut(id).ok) return;
       this.tools.carryOut(command, () => {});
       return;
