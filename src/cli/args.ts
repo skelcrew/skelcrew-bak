@@ -5,11 +5,13 @@ import { TaskId } from "../core/ids";
 import type { Intent, Rigor } from "../core/types";
 import type { WireInput } from "../protocol/protocol";
 import { intent, rigor } from "../store/schema";
-import { type Flags, type Read, text, within } from "./parse";
+import { readAgentArgs } from "./agent-args";
+import { type Flags, fromDisk, type Read, type ReadFile, text, within } from "./parse";
 
 export type { Read } from "./parse";
 
-export function readArgs(args: string[]): Read {
+// `files` reads the files an agent's command names.
+export function readArgs(args: string[], files: ReadFile = fromDisk): Read {
   const [name = "help", ...rest] = args;
   switch (name) {
     case "ls":
@@ -41,10 +43,12 @@ export function readArgs(args: string[]): Read {
       return bare(name, rest, { type: "kill" });
 
     default:
-      return {
-        ok: false,
-        message: `There is no \`skel ${name}\`. Run \`skel help\` for the commands.`,
-      };
+      return (
+        readAgentArgs(name, rest, files) ?? {
+          ok: false,
+          message: `There is no \`skel ${name}\`. Run \`skel help\` for the commands.`,
+        }
+      );
   }
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { TaskId } from "../core/ids";
 import type { WireInput } from "../protocol/protocol";
-import { readArgs } from "./args";
+import { type Read, readArgs } from "./args";
 
 const task = TaskId.parse(142);
 
@@ -135,6 +135,130 @@ describe("a command that can't be read", () => {
     expect(readArgs(["reply", "142"])).toEqual({
       ok: false,
       message: 'Say what to reply, as in `skel reply 142 "text"`.',
+    });
+  });
+});
+
+describe("an agent's commands", () => {
+  // Files an agent hands over, by path.
+  const files: Record<string, string> = {
+    "brief.md": "Skip empty header rows.",
+    "spec.md": "# Spec",
+    "summary.md": "Fixed the export.",
+    "report.md": "It's the cache.",
+    "evidence.md": "Tests pass.",
+    "findings.md": "The empty case still fails.",
+    "tasks.md": "## Fix the cache\nClear it on write.\n\n## Add a test\nFor the empty export.\n",
+  };
+  const read = (args: string[]) =>
+    readArgs(args, (path) =>
+      path in files ? { ok: true, text: files[path] ?? "" } : { ok: false },
+    );
+  const sends = (input: WireInput): Read => ({
+    ok: true,
+    call: { type: "send", task: null, input },
+  });
+
+  test("triage proceed, with the brief and spec read from their files", () => {
+    expect(
+      read([
+        "triage",
+        "proceed",
+        "--intent",
+        "ship",
+        "--rigor",
+        "full",
+        "--approve",
+        "--brief",
+        "brief.md",
+        "--spec",
+        "spec.md",
+      ]),
+    ).toEqual(
+      sends({
+        type: "triage_proceed",
+        plan: { intent: "ship", rigor: "full", approve: true, brief: "Skip empty header rows." },
+        spec: "# Spec",
+      }),
+    );
+  });
+
+  test("triage proceed needs an intent, a rigor and a brief", () => {
+    expect(read(["triage", "proceed", "--intent", "ship", "--brief", "brief.md"])).toEqual({
+      ok: false,
+      message: "`skel triage proceed` needs --intent, --rigor and --brief.",
+    });
+  });
+
+  test("triage split, with one task per heading", () => {
+    expect(read(["triage", "split", "tasks.md"])).toEqual(
+      sends({
+        type: "triage_split",
+        proposals: [
+          { title: "Fix the cache", description: "Clear it on write." },
+          { title: "Add a test", description: "For the empty export." },
+        ],
+      }),
+    );
+  });
+
+  test("triage ask and triage decline", () => {
+    expect(
+      read(["triage", "ask", "Include archived items?", "--option", "yes", "--option", "no"]),
+    ).toEqual(sends({ type: "ask", text: "Include archived items?", options: ["yes", "no"] }));
+    expect(read(["triage", "decline", "Already fixed in #131"])).toEqual(
+      sends({ type: "triage_decline", reason: "Already fixed in #131" }),
+    );
+  });
+
+  test("ask, progress and give-up", () => {
+    expect(read(["ask", "Keep the old format too?"])).toEqual(
+      sends({ type: "ask", text: "Keep the old format too?", options: [] }),
+    );
+    expect(read(["progress", "Found the cause"])).toEqual(
+      sends({ type: "progress", text: "Found the cause" }),
+    );
+    expect(read(["give-up", "Needs credentials I don't have"])).toEqual(
+      sends({ type: "give_up", message: "Needs credentials I don't have" }),
+    );
+  });
+
+  test("done, with a summary or with a report and proposed tasks", () => {
+    expect(read(["done", "--summary", "summary.md"])).toEqual(
+      sends({ type: "done", summary: "Fixed the export." }),
+    );
+    expect(read(["done", "--report", "report.md", "--tasks", "tasks.md"])).toEqual(
+      sends({
+        type: "done_answer",
+        report: "It's the cache.",
+        proposals: [
+          { title: "Fix the cache", description: "Clear it on write." },
+          { title: "Add a test", description: "For the empty export." },
+        ],
+      }),
+    );
+  });
+
+  test("done needs a summary or a report, not both", () => {
+    expect(read(["done"])).toEqual({
+      ok: false,
+      message: "`skel done` needs --summary, or --report for an answer.",
+    });
+  });
+
+  test("pass and changes", () => {
+    expect(read(["pass", "--evidence", "evidence.md"])).toEqual(
+      sends({ type: "pass", evidence: "Tests pass." }),
+    );
+    expect(read(["changes", "findings.md"])).toEqual(
+      sends({ type: "changes", findings: "The empty case still fails." }),
+    );
+  });
+
+  test("a file that can't be read is refused, naming it", () => {
+    expect(read(["pass", "--evidence", "missing.md"])).toEqual({
+      ok: false,
+      message: "missing.md can't be read.",
     });
   });
 });

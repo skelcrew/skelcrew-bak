@@ -1,12 +1,25 @@
 // What every `skel` command shares when it reads its arguments.
 
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import type { Call } from "../protocol/protocol";
 
 export type Read = { ok: true; call: Call } | { ok: false; message: string };
 
-export type Flags = Record<string, { type: "boolean" | "string" }>;
+export type Flags = Record<string, { type: "boolean" | "string"; multiple?: boolean }>;
 export type Values = Record<string, string | boolean | (string | boolean)[] | undefined>;
+
+// Reads a file an agent hands over, such as its brief. Passed in, so the
+// tests need no disk.
+export type ReadFile = (path: string) => { ok: true; text: string } | { ok: false };
+
+export const fromDisk: ReadFile = (path) => {
+  try {
+    return { ok: true, text: readFileSync(path, "utf8") };
+  } catch {
+    return { ok: false };
+  }
+};
 
 // Reads the flags and up to `most` plain arguments, refusing anything else.
 export function within(
