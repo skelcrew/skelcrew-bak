@@ -1,6 +1,7 @@
 // The event store: every event, in the order it happened, in one SQLite
 // file. The log is what is saved. Tasks are rebuilt from it by replaying
-// their events through evolve.
+// their events through evolve. Beside it, the outbox keeps each command until
+// it is carried out, so a crash in between loses nothing.
 //
 // Each event is checked twice: against its schema before it is written, so
 // nothing malformed gets in, and again when read back, since anything could
@@ -8,8 +9,8 @@
 
 import { Database } from "bun:sqlite";
 import { evolve } from "../core/evolve";
-import type { Task, TaskEvent, TaskId } from "../core/types";
-import { parseTaskEvent } from "./schema";
+import type { Command, Task, TaskEvent, TaskId } from "../core/types";
+import { parseCommand, parseTaskEvent } from "./schema";
 
 // Each change to the table layout is one step, run once, in order. The
 // file's user_version says how many have run.
@@ -20,9 +21,20 @@ const migrations = [
      body    TEXT NOT NULL
    );
    CREATE INDEX events_by_task ON events (task_id, seq);`,
+  // Commands saved with their decision and not yet carried out. If the
+  // daemon dies before one finishes, it goes out again after the restart.
+  `CREATE TABLE commands (
+     id   INTEGER PRIMARY KEY AUTOINCREMENT,
+     body TEXT NOT NULL
+   );`,
 ];
 
 export type Saved = { ok: true } | { ok: false; reason: string };
+
+// A saved decision, with the id of each of its commands, in order.
+export type Queued = { ok: true; ids: number[] } | { ok: false; reason: string };
+
+export type SavedCommand = { id: number; command: Command };
 
 // What was read back, or the position of the first row that couldn't be
 // read or didn't fit, so it can be found and looked at.
@@ -55,18 +67,52 @@ export class EventStore {
     this.db.close();
   }
 
-  // Saves one decision's events together: all of them, or none if any fails
-  // its schema.
-  append(events: TaskEvent[]): Saved {
+  // Saves one decision's events and commands together: all of them, or none
+  // if any fails its schema. Returns each command's id, to mark it carried
+  // out later.
+  append(events: TaskEvent[], commands: Command[] = []): Queued {
     for (const event of events) {
       const parsed = parseTaskEvent(readJson(JSON.stringify(event)));
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
     }
+    for (const command of commands) {
+      const parsed = parseCommand(readJson(JSON.stringify(command)));
+      if (!parsed.ok) return { ok: false, reason: parsed.reason };
+    }
     const insert = this.db.query("INSERT INTO events (task_id, body) VALUES ($task, $body)");
-    this.db.transaction(() => {
+    const queue = this.db.query<{ id: number }, { body: string }>(
+      "INSERT INTO commands (body) VALUES ($body) RETURNING id",
+    );
+    const ids = this.db.transaction(() => {
       for (const event of events) insert.run({ task: event.taskId, body: JSON.stringify(event) });
+      return commands.map((command) => {
+        const row = queue.get({ body: JSON.stringify(command) });
+        if (row === null) throw new Error("SQLite returned no id for a saved command.");
+        return row.id;
+      });
     })();
+    return { ok: true, ids };
+  }
+
+  // A command has been carried out, so a restart won't send it again.
+  carriedOut(id: number): Saved {
+    this.db.query("DELETE FROM commands WHERE id = $id").run({ id });
     return { ok: true };
+  }
+
+  // The commands saved and not yet carried out, oldest first. A damaged one
+  // is reported with its id.
+  loadCommands(): Loaded<{ commands: SavedCommand[] }> {
+    const rows = this.db
+      .query<{ id: number; body: string }, []>("SELECT id, body FROM commands ORDER BY id")
+      .all();
+    const commands: SavedCommand[] = [];
+    for (const row of rows) {
+      const parsed = parseCommand(readJson(row.body));
+      if (!parsed.ok) return { ok: false, seq: row.id, reason: parsed.reason };
+      commands.push({ id: row.id, command: parsed.value });
+    }
+    return { ok: true, commands };
   }
 
   // Every task, rebuilt from the log. A row that can't be read, or an event

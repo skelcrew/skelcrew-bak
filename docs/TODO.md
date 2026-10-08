@@ -17,7 +17,7 @@ split into tasks here.
       when read back, and a damaged row reported with its position.
 - [x] **Saved-events fixture.** Real events in today's shape that must always read back, with
       the rule in `AGENTS.md` for when it may be regenerated.
-- [ ] **Outbox.** Commands saved with the events that caused them, in one transaction, and
+- [x] **Outbox.** Commands saved with the events that caused them, in one transaction, and
       marked done when their tool finishes.
 - [ ] **Loop.** Decide, save, evolve, carry out. A failed save changes nothing. The count of
       starts and stops the tasks no longer record, for the scheduler.

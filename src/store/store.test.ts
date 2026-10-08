@@ -17,7 +17,7 @@ import {
   stopped,
   workspaceCreated,
 } from "../core/testing";
-import type { Task, TaskEvent } from "../core/types";
+import type { Command, Task, TaskEvent } from "../core/types";
 import { EventStore } from "./store";
 
 // Every event of one task that went through triage, and whose builder has
@@ -62,7 +62,7 @@ describe("the event store", () => {
   test("rebuilds every task from its events", () => {
     const store = EventStore.open(":memory:");
     const { events: log, task } = lifecycle();
-    expect(store.append(log)).toEqual({ ok: true });
+    expect(store.append(log)).toEqual({ ok: true, ids: [] });
 
     expect(store.loadTasks()).toEqual({ ok: true, tasks: new Map([[id, task]]) });
   });
@@ -123,5 +123,54 @@ describe("the event store", () => {
 
     const loaded = EventStore.open(path).loadTasks();
     expect(!loaded.ok && loaded.seq).toBe(2);
+  });
+});
+
+const stop: Command = {
+  type: "stop_session",
+  taskId: id,
+  request: 9,
+  session: builder,
+  save: true,
+  remove: null,
+};
+
+describe("the outbox", () => {
+  test("saves commands with their events, and hands back their ids", () => {
+    const store = EventStore.open(":memory:");
+
+    expect(store.append(events(), [stop])).toEqual({ ok: true, ids: [1] });
+    expect(store.loadCommands()).toEqual({ ok: true, commands: [{ id: 1, command: stop }] });
+  });
+
+  test("forgets a command once it is carried out", () => {
+    const store = EventStore.open(":memory:");
+    store.append(events(), [stop]);
+    store.carriedOut(1);
+
+    expect(store.loadCommands()).toEqual({ ok: true, commands: [] });
+  });
+
+  test("saves nothing, events included, when a command doesn't fit its schema", () => {
+    const store = EventStore.open(":memory:");
+    // A command the core could never produce, as a damaged caller might send.
+    const bad = JSON.parse(JSON.stringify({ ...stop, extra: 1 }));
+
+    expect(store.append(events(), [bad]).ok).toBe(false);
+    expect(store.loadTasks()).toEqual({ ok: true, tasks: new Map() });
+    expect(store.loadCommands()).toEqual({ ok: true, commands: [] });
+  });
+
+  test("reports a damaged command with its id", () => {
+    const path = file();
+    const store = EventStore.open(path);
+    store.append(events(), [stop]);
+    store.close();
+    const db = new Database(path);
+    db.run("UPDATE commands SET body = '{}' WHERE id = 1");
+    db.close();
+
+    const loaded = EventStore.open(path).loadCommands();
+    expect(!loaded.ok && loaded.seq).toBe(1);
   });
 });
