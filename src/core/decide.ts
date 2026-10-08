@@ -960,7 +960,8 @@ function setPlan(
 }
 
 // Build starts over with a new plan. A working agent is stopped first, and the
-// fresh builder starts once that stop is confirmed.
+// fresh builder starts once that stop is confirmed. set is refused while an
+// earlier stop is on its way, so that is the only stop to wait for.
 function restartBuild(
   task: Exclude<Task, { phase: "ended" }>,
   plan: Plan,
@@ -968,7 +969,7 @@ function restartBuild(
   ctx: Context,
 ): Decision {
   const stop = stopRunning(task, next(task), { workspace: false, copy: true });
-  const waitForStop = stop.events.length > 0 || task.stopping !== null;
+  const waitForStop = stop.events.length > 0;
   // Leaving review drops the tester's copy. A working tester's stop removes
   // it. Otherwise it goes now.
   const commands = [...stop.commands];
