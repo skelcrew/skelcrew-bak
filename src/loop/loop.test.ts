@@ -155,6 +155,53 @@ describe("a tool's reply", () => {
   });
 });
 
+describe("a tool's reply that doesn't fit its command", () => {
+  // A loop whose task 142 waits for its workspace, with that command's reply.
+  function waitingForWorkspace() {
+    const store = EventStore.open(":memory:");
+    const tools = replying();
+    const loop = new Loop(config, tools, store);
+    loop.send(id, add());
+    loop.send(id, start);
+    const reply = tools.replies.get(`${id}:create_workspace`);
+    if (reply === undefined) throw new Error("No workspace was asked for.");
+    return { store, loop, reply };
+  }
+
+  test("of another kind is a bug in the tool, and saves nothing", () => {
+    const { store, reply } = waitingForWorkspace();
+
+    expect(() => reply(sessionStarted(1, planner))).toThrow(
+      "The reply to create_workspace was session_started, which doesn't answer it.",
+    );
+    expect(outboxTypes(store)).toEqual(["create_workspace"]);
+  });
+
+  test("for another request is a bug in the tool", () => {
+    const { reply } = waitingForWorkspace();
+
+    expect(() => reply(workspaceCreated(7))).toThrow(
+      "The reply to create_workspace was for request 7, and the command is request 1.",
+    );
+  });
+
+  test("of null, for a command that has a reply, is a bug in the tool", () => {
+    const { reply } = waitingForWorkspace();
+
+    expect(() => reply(null)).toThrow(
+      "The reply to create_workspace was null, which doesn't answer it.",
+    );
+  });
+
+  test("from anyone but a tool is a bug in the tool", () => {
+    const { reply } = waitingForWorkspace();
+
+    expect(() => reply({ by: "you", type: "approve" })).toThrow(
+      "The reply to create_workspace was approve, which doesn't answer it.",
+    );
+  });
+});
+
 describe("starting what waits", () => {
   // Three tasks, added one after another.
   function threeQueued(tools: Tools) {

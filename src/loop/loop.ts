@@ -206,6 +206,8 @@ export class Loop {
       return;
     }
     this.tools.carryOut(command, (input) => {
+      const misfit = misfits(command, input);
+      if (misfit !== null) throw new Error(misfit);
       if (this.pending.has(id) && !this.unsaved.has(id)) this.receive(command, input, id);
     });
   }
@@ -256,5 +258,50 @@ export class Loop {
       default:
         return false;
     }
+  }
+}
+
+// Why a tool's reply doesn't answer its command, or null when it does. Tools
+// are Skelcrew's own code, so a reply that doesn't fit is a bug in one, and
+// the loop throws rather than let it retire the command: the task would wait
+// forever for a reply that never comes.
+function misfits(command: Command, input: Input | null): string | null {
+  const answers = repliesTo(command);
+  const fits =
+    input === null ? answers.length === 0 : input.by === "plugin" && answers.includes(input.type);
+  if (!fits) {
+    return `The reply to ${command.type} was ${input?.type ?? "null"}, which doesn't answer it.`;
+  }
+  if (
+    input !== null &&
+    "request" in input &&
+    "request" in command &&
+    input.request !== command.request
+  ) {
+    return `The reply to ${command.type} was for request ${input.request}, and the command is request ${command.request}.`;
+  }
+  return null;
+}
+
+// The replies that answer a command. None means it has no reply.
+function repliesTo(command: Command): Input["type"][] {
+  switch (command.type) {
+    case "create_workspace":
+      return ["workspace_created", "workspace_failed"];
+    case "create_copy":
+      return ["copy_created", "workspace_failed"];
+    case "start_session":
+      return ["session_started", "session_failed"];
+    case "stop_session":
+      return command.request === null ? [] : ["stopped"];
+    case "commit_spec":
+      return ["spec_committed", "spec_failed"];
+    case "merge_main":
+      return ["main_merged", "main_conflict", "main_failed"];
+    case "deliver":
+      return ["delivered", "delivery_failed"];
+    case "remove_workspace":
+    case "type_into_session":
+      return [];
   }
 }

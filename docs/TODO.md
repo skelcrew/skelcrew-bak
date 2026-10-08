@@ -43,7 +43,7 @@ for you. The first three are proven by a script that walks the core through them
       clears. Found by Codex.
 - [ ] **`detach hand_over` skips the checks `done` makes**, such as an empty branch. Found
       by Fable.
-- [ ] **The loop doesn't check a reply against its command.** A null or wrong-request reply
+- [x] **The loop doesn't check a reply against its command.** A null or wrong-request reply
       retires the command and leaves the task waiting forever. Not the core, so it is
       fixed in milestone 3.
 
