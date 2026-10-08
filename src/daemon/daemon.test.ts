@@ -338,6 +338,47 @@ describe("an agent's done", () => {
   });
 });
 
+describe("a request the daemon fails on", () => {
+  test("is refused with why, and the daemon carries on", async () => {
+    const repo = folder();
+    const served = await serve(repo, {
+      socketFolder: join(folder(), "sockets"),
+      tickMs: 10,
+      branchOf: () => {
+        throw new Error("git isn't installed");
+      },
+    });
+    if (!served.ok) throw new Error(served.message);
+    running.push(served.daemon);
+    const daemon = served.daemon;
+    const shipLight: Call = {
+      type: "send",
+      task: null,
+      input: {
+        type: "add",
+        title: "Fix the export",
+        description: null,
+        plan: { intent: "ship", rigor: "light", approve: false },
+      },
+    };
+    await send(daemon.socket, shipLight);
+    await untilAsync(async () => {
+      const listed = await send(daemon.socket, { type: "ls" });
+      return (
+        listed.ok && listed.result.kind === "tasks" && listed.result.tasks[0]?.state === "running"
+      );
+    });
+    const token = readFileSync(join(repo, ".skelcrew", "sessions", "1"), "utf8").trim();
+
+    const done: Call = { type: "send", task: null, input: { type: "done", summary: "Fixed it." } };
+    expect(await send(daemon.socket, done, token)).toEqual({
+      ok: false,
+      message: "The daemon failed on this request: git isn't installed",
+    });
+    expect((await send(daemon.socket, { type: "ls" })).ok).toBe(true);
+  });
+});
+
 async function untilAsync(done: () => Promise<boolean>): Promise<void> {
   for (let waited = 0; !(await done()) && waited < 1_000; waited += 5) await Bun.sleep(5);
 }

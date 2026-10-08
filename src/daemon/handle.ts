@@ -28,11 +28,23 @@ export function answerLine(context: Context, line: string): string {
   const parsed = parseRequest(line);
   if (!parsed.ok) return refusal(parsed.message);
   const { id, token, call } = parsed.value;
-  const handled = handle(context, call, token);
+  const handled = guarded(() => handle(context, call, token));
   const answer: Answer = handled.ok
     ? { v: VERSION, id, ok: true, result: handled.result }
     : { v: VERSION, id, ok: false, message: handled.message };
   return `${JSON.stringify(answer)}\n`;
+}
+
+// A failure inside one request, such as git failing, is refused with why and
+// logged, rather than taking down the daemon and every task it runs.
+function guarded(handled: () => Handled): Handled {
+  try {
+    return handled();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`A request failed: ${reason}`);
+    return { ok: false, message: `The daemon failed on this request: ${reason}` };
+  }
 }
 
 // A call with a token comes from that token's session, and goes to the task

@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { readConfig } from "../config/config";
 import type { SessionId } from "../core/ids";
+import type { BranchFacts, Task } from "../core/types";
 import { Loop, type Tools } from "../loop/loop";
 import { FakeTools } from "../sim/fakes";
 import { EventStore } from "../store/store";
@@ -29,6 +30,9 @@ export type ServeOptions = {
   socketFolder?: string;
   // The fake tools unless given. The real ones come in milestone 4.
   tools?: Tools;
+  // What git says about a task's branch, added to an agent's done. The
+  // fakes' unless given.
+  branchOf?: (task: Task) => BranchFacts;
   now?: () => number;
   // How often the daemon retries replies it couldn't save and starts what
   // the scheduler picks. A second unless set.
@@ -52,7 +56,17 @@ function fakeTools(fakes: FakeTools, tokens: Tokens, sessions: string): Tools {
         mkdirSync(sessions, { recursive: true });
         writeFileSync(join(sessions, `${command.taskId}`), `${tokens.tokenFor(answer.session)}\n`);
       }
-      setTimeout(() => reply(answer), 0);
+      setTimeout(() => {
+        try {
+          reply(answer);
+        } catch (error) {
+          // A reply that doesn't fit its command. Its command stays in the
+          // outbox, and goes out again at the next start.
+          console.error(
+            `A tool's reply failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }, 0);
     },
   };
 }
@@ -110,14 +124,19 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
     }
     const loop = opened.loop;
 
-    const context = { loop, tokens, branchOf: () => fakes.branch() };
+    const context = { loop, tokens, branchOf: options.branchOf ?? (() => fakes.branch()) };
     const listening = await listen(paths.socket, (line) => answerLine(context, line));
     undo.push(() => rmSync(paths.socket, { force: true }));
     // Each tick runs between requests, never during one, since both run on
     // this one thread and neither waits.
+    // A failure in one is logged, and the next tick tries again.
     const ticking = setInterval(() => {
-      loop.retryReplies();
-      loop.startWaiting();
+      try {
+        loop.retryReplies();
+        loop.startWaiting();
+      } catch (error) {
+        console.error(`A tick failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }, options.tickMs ?? 1_000);
     return {
       ok: true,
