@@ -65,69 +65,75 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   const text = existsSync(paths.config) ? readFileSync(paths.config, "utf8") : "";
   const read = readConfig(text);
   if (!read.ok) return { ok: false, message: `skelcrew.yaml: ${read.reasons.join("; ")}` };
+  const config = read.settings.config;
 
-  // The socket lives here, so only this user may reach in, from before it
-  // exists.
-  mkdirSync(paths.folder, { recursive: true, mode: 0o700 });
-  chmodSync(paths.folder, 0o700);
-  // Nothing in it belongs in git, least of all the secret that signs every
-  // session token. This holds in any repository, whatever its .gitignore.
-  writeFileSync(join(paths.folder, ".gitignore"), "*\n");
-  const locked = takeLock(paths.repo);
-  if (!locked.ok) return locked;
-  const lock = locked.lock;
-  // Everything after the lock lets go of it on the way out if it fails.
-  const fail = (message: string): Served => {
-    lock.release();
-    return { ok: false, message };
+  // What has been taken so far, let go of in reverse if a later step fails,
+  // so a failed start never keeps the lock or the store.
+  const undo: (() => void)[] = [];
+  const letGo = () => {
+    for (const step of undo.reverse()) step();
   };
-
-  if (paths.sharedSocketFolder !== null) {
-    const refused = ownSocketFolder(paths.sharedSocketFolder);
-    if (refused !== null) return fail(refused);
-  }
-  // Holding the lock means no other daemon runs here, so a socket file still
-  // there was left by one that died.
-  rmSync(paths.socket, { force: true });
-
-  let store: EventStore;
   try {
-    store = EventStore.open(paths.store);
-  } catch (error) {
-    return fail(`.skelcrew/skelcrew.db couldn't be opened: ${String(error)}`);
-  }
-  const fakes = new FakeTools();
-  const tokens = new Tokens(loadSecret(join(paths.folder, "secret")));
-  const tools = options.tools ?? fakeTools(fakes, tokens, join(paths.folder, "sessions"));
-  const opened = Loop.open(read.settings.config, tools, store, {
-    ...(options.now === undefined ? {} : { now: options.now }),
-  });
-  if (!opened.ok) {
-    store.close();
-    return fail(`.skelcrew/skelcrew.db can't be read back. ${opened.reason}`);
-  }
-  const loop = opened.loop;
+    // The socket lives here, so only this user may reach in, from before it
+    // exists.
+    mkdirSync(paths.folder, { recursive: true, mode: 0o700 });
+    chmodSync(paths.folder, 0o700);
+    // Nothing in it belongs in git, least of all the secret that signs every
+    // session token. This holds in any repository, whatever its .gitignore.
+    writeFileSync(join(paths.folder, ".gitignore"), "*\n");
 
-  const context = { loop, tokens, branchOf: () => fakes.branch() };
-  const listening = await listen(paths.socket, (line) => answerLine(context, line));
-  // Each tick runs between requests, never during one, since both run on
-  // this one thread and neither waits.
-  const ticking = setInterval(() => {
-    loop.retryReplies();
-    loop.startWaiting();
-  }, options.tickMs ?? 1_000);
-  return {
-    ok: true,
-    daemon: {
-      socket: paths.socket,
-      tokenFor: (session) => tokens.tokenFor(session),
-      stop: async () => {
-        clearInterval(ticking);
-        await listening.stop();
-        store.close();
-        rmSync(paths.socket, { force: true });
-        lock.release();
+    const locked = takeLock(paths.repo);
+    if (!locked.ok) return locked;
+    undo.push(() => locked.lock.release());
+    if (paths.sharedSocketFolder !== null) {
+      const refused = ownSocketFolder(paths.sharedSocketFolder);
+      if (refused !== null) {
+        letGo();
+        return { ok: false, message: refused };
+      }
+    }
+    // Holding the lock means no other daemon runs here, so a socket file
+    // still there was left by one that died.
+    rmSync(paths.socket, { force: true });
+
+    const store = EventStore.open(paths.store);
+    undo.push(() => store.close());
+    const fakes = new FakeTools();
+    const tokens = new Tokens(loadSecret(join(paths.folder, "secret")));
+    const tools = options.tools ?? fakeTools(fakes, tokens, join(paths.folder, "sessions"));
+    const opened = Loop.open(config, tools, store, {
+      ...(options.now === undefined ? {} : { now: options.now }),
+    });
+    if (!opened.ok) {
+      letGo();
+      return { ok: false, message: `.skelcrew/skelcrew.db can't be read back. ${opened.reason}` };
+    }
+    const loop = opened.loop;
+
+    const context = { loop, tokens, branchOf: () => fakes.branch() };
+    const listening = await listen(paths.socket, (line) => answerLine(context, line));
+    undo.push(() => rmSync(paths.socket, { force: true }));
+    // Each tick runs between requests, never during one, since both run on
+    // this one thread and neither waits.
+    const ticking = setInterval(() => {
+      loop.retryReplies();
+      loop.startWaiting();
+    }, options.tickMs ?? 1_000);
+    return {
+      ok: true,
+      daemon: {
+        socket: paths.socket,
+        tokenFor: (session) => tokens.tokenFor(session),
+        stop: async () => {
+          clearInterval(ticking);
+          await listening.stop();
+          letGo();
+        },
       },
-    },
-  };
+    };
+  } catch (error) {
+    letGo();
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, message: `The daemon couldn't start: ${reason}` };
+  }
 }

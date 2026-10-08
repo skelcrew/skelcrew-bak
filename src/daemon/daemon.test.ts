@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { SessionId, TaskId } from "../core/ids";
@@ -118,6 +118,21 @@ describe("the daemon", () => {
 
     const ignored = Bun.spawnSync(["git", "check-ignore", "-q", ".skelcrew/secret"], { cwd: repo });
     expect(ignored.exitCode).toBe(0);
+  });
+
+  test("refuses to start when its secret can't be read, and lets go of the lock", async () => {
+    const repo = folder();
+    const socketFolder = join(folder(), "sockets");
+    mkdirSync(join(repo, ".skelcrew", "secret"), { recursive: true });
+
+    const served = await serve(repo, { socketFolder });
+    expect(served.ok).toBe(false);
+    expect(!served.ok && served.message).toStartWith("The daemon couldn't start:");
+
+    rmSync(join(repo, ".skelcrew", "secret"), { recursive: true });
+    const again = await serve(repo, { socketFolder });
+    if (again.ok) running.push(again.daemon);
+    expect(again.ok).toBe(true);
   });
 
   test("keeps its tasks across a restart", async () => {
