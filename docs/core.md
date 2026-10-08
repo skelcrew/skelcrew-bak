@@ -271,3 +271,54 @@ message shows as an idle agent, and you can reply again.
 
 Output plugins that only mirror state, such as an issue comment or a notification, listen to
 events. They never block a task, and the core sends them no command.
+
+## Decisions made while building the core
+
+**Status: waiting for your review.** Building the core unattended forced these calls, which
+the sections above don't make. The code and its tests follow them.
+
+**Waiting instead of refusing**
+
+- **Pause, set and start wait while a step is under way**: a workspace or copy being made, a
+  session starting, a spec being committed, main merging, or a delivery. They also wait
+  while an agent is still stopping. The core refuses with "waits until it settles", and the
+  CLI sends the input again. Kill always works.
+- **A start carries on from where the task waits.** A build that was handed over merges or
+  goes to review instead of building again. A review whose tester crashed reuses its copy.
+
+**Holds and failures**
+
+- **A hold only sends a step with an agent back to the queue.** A merge, a spec commit, an
+  approval or a delivery keeps its step, so an approval still waits for you.
+- **A failure answers its request.** After a failed merge, spec commit or delivery, nothing
+  waits until your retry, which sends a new request. A reply after the failure changes
+  nothing.
+- **A failed save on a task already held keeps the existing hold.** `session.stopped`
+  records the failed save, and the work stays in the workspace.
+- **A stop takes the question of the agent it stops**, so no question outlives its agent.
+
+**Workspaces and stops**
+
+- **A stop says what it removes once the work is safe.** It removes nothing if the save
+  failed. A split or decline deletes the branch too, since nothing was built. A kill keeps
+  the branch, since it holds the work. Delivery removes the worktree and keeps the branch.
+- **An ended task keeps track of its workspace** until its removal is confirmed. It accepts
+  only a stop's confirmation, a workspace removal, usage, and your decisions on proposals.
+- **Late replies are cleaned up**: a workspace or copy that arrives late is removed, and a
+  session that starts late is stopped. That stop has no request, since nobody waits on it.
+  A repeated reply for what the task already holds is ignored.
+- **The scheduler skips a task while its last agent is stopping**, and that task keeps its
+  slot until the stop is confirmed, even once held or ended.
+
+**Events**
+
+- **`build.restarted`** carries the new plan when you change intent, or when your intent and
+  rigor end triage. It says whether the build waits for an agent's stop first.
+- **`review.ready`** moves an `answer` to review with its handed-over commit, since it merges
+  nothing.
+- **A spec is committed while the planner stops.** The builder starts once both are done,
+  in either order.
+- **Detaching to hand over** needs the branch facts from the daemon, as `done` does, and only
+  a builder's work can be handed over.
+- **Usage is kept per session.** A report lower than that session's last one is older, and
+  is refused.

@@ -16,6 +16,7 @@ import picomatch from "picomatch";
 import { decide } from "./decide";
 import { evolve } from "./evolve";
 import { CommitSha, SessionId, TaskId } from "./ids";
+import { schedule, slotsInUse } from "./schedule";
 import { runningSession } from "./task";
 import type {
   BranchFacts,
@@ -29,7 +30,6 @@ import type {
   Workspace,
 } from "./types";
 
-const id = TaskId.parse(142);
 const workspace: Workspace = { path: "/repo/.skelcrew/worktrees/142", branch: "skel/142" };
 const copyAt = (request: number): TesterCopy => ({
   path: `/repo/.skelcrew/review/142-${request}`,
@@ -53,6 +53,7 @@ const configs = fc.constantFrom<Config>(
 type Started = { role: Role; edits: boolean };
 
 type World = {
+  id: TaskId;
   config: Config;
   task: Task | null;
   log: TaskEvent[];
@@ -70,8 +71,9 @@ type World = {
   lastInput?: Input; // for debugging a failure
 };
 
-export function newWorld(config: Config): World {
+export function newWorld(config: Config, id = TaskId.parse(142)): World {
   return {
+    id,
     config,
     task: null,
     log: [],
@@ -346,7 +348,7 @@ function movesOn(input: Input): boolean {
 
 export function step(world: World, choice: Choice, at: number): void {
   const all = candidates(world);
-  const envelope = (input: Input) => ({ taskId: id, at, input });
+  const envelope = (input: Input) => ({ taskId: world.id, at, input });
   const records = (input: Input) => {
     const decision = decide(world.task, envelope(input), world.config);
     return decision.ok && decision.events.length > 0;
@@ -628,7 +630,65 @@ function lifecycle(config: Config, choices: Choice[], guide: (choice: Choice) =>
   }
 }
 
+// Four tasks sharing the scheduler. Each step either sends one task an input,
+// as above, or lets the scheduler start what it picks. Rule 10: Skelcrew
+// never puts more than max_running agents to work on its own.
+function sharedLifecycle(config: Config, choices: Choice[]): void {
+  const worlds = [1, 2, 3, 4].map((n) => newWorld(config, TaskId.parse(n)));
+  for (const [i, choice] of choices.entries()) {
+    const world = worlds[choice.n % worlds.length];
+    if (world === undefined) continue;
+    if (world.task === null) {
+      step(world, { guided: true, n: 1 }, 1_000 + i); // added with intent and rigor
+      continue;
+    }
+    if (choice.n % 3 === 0) {
+      const tasks = worlds.flatMap((w) => (w.task === null ? [] : [w.task]));
+      const before = slotsInUse(tasks, 0);
+      for (const picked of schedule(tasks, config, 0)) {
+        const owner = worlds.find((w) => w.task?.id === picked);
+        if (owner === undefined) continue;
+        const input: Input =
+          owner.task?.keptAnswer !== null
+            ? { by: "daemon", type: "deliver_answer" }
+            : { by: "daemon", type: "start" };
+        const decision = decide(owner.task, { taskId: picked, at: 1_000 + i, input }, config);
+        if (!decision.ok) continue;
+        let task = owner.task;
+        for (const event of decision.events) {
+          const evolved = evolve(task, event);
+          if (evolved.ok) task = evolved.task;
+        }
+        owner.task = task;
+        owner.log.push(...decision.events);
+        owner.sent.push(...decision.commands);
+        for (const command of decision.commands) {
+          if (command.type === "start_session") {
+            owner.sessions.set(sessionFor(command.request), {
+              role: command.role,
+              edits: command.edits,
+            });
+          }
+        }
+      }
+      const after = worlds.flatMap((w) => (w.task === null ? [] : [w.task]));
+      expect(slotsInUse(after, 0)).toBeLessThanOrEqual(Math.max(before, config.maxRunning));
+    } else {
+      step(world, { guided: choice.n % 5 !== 0, n: Math.floor(choice.n / 4) }, 1_000 + i);
+    }
+  }
+}
+
 describe("the core's invariants", () => {
+  test("hold for tasks sharing the scheduler, which never goes past max_running", () => {
+    fc.assert(
+      fc.property(configs, steps(40), (config, choices) => {
+        sharedLifecycle(config, choices);
+      }),
+      { numRuns: 150 },
+    );
+  });
+
   test("hold through random lifecycles, half of their steps guided", () => {
     fc.assert(
       fc.property(configs, steps(1), (config, choices) =>
