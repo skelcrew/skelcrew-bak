@@ -96,6 +96,11 @@ export class Loop {
     return this.tasks.get(taskId) ?? null;
   }
 
+  // Every task the loop holds.
+  all(): Task[] {
+    return [...this.tasks.values()];
+  }
+
   // Slots taken by work the tasks no longer record, for the scheduler: a
   // session or workspace still starting for a task that has moved on, such as
   // one killed while it started, and a late session's cleanup stop. Each
@@ -117,7 +122,7 @@ export class Loop {
   // What the scheduler picks now, as the input each pick becomes: a kept
   // answer to deliver, or a start.
   picks(): { taskId: TaskId; input: Input }[] {
-    return schedule([...this.tasks.values()], this.config, this.inFlight).map((taskId) => {
+    return schedule(this.all(), this.config, this.inFlight).map((taskId) => {
       const kept = this.task(taskId)?.keptAnswer ?? null;
       const input: Input = { by: "daemon", type: kept === null ? "start" : "deliver_answer" };
       return { taskId, input };

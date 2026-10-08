@@ -85,9 +85,10 @@ export class Simulator {
   }
 
   // Whether the loop's tasks match a fresh replay of the saved log.
+  // Both ways: the loop holds no task the log doesn't.
   tasksMatchTheLog(): boolean {
     const loaded = this.store.loadTasks();
-    if (!loaded.ok) return false;
+    if (!loaded.ok || loaded.tasks.size !== this.loop.all().length) return false;
     for (const [taskId, task] of loaded.tasks) {
       if (!Bun.deepEquals(this.loop.task(taskId), task)) return false;
     }
