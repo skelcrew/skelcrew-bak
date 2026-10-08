@@ -9,6 +9,7 @@ import { sendStarting } from "../daemon/client";
 import { serve } from "../daemon/daemon";
 import { daemonPaths, findRepo, ownSocketFolder } from "../daemon/paths";
 import { run } from "./cli";
+import { daemonEnv } from "./env";
 
 const args = Bun.argv.slice(2);
 // The repository this command belongs to, from whichever folder in it.
@@ -60,6 +61,7 @@ async function start(folder: string): Promise<() => string | null> {
   const log = openSync(logPath, "a");
   const daemon = Bun.spawn([process.execPath, import.meta.path, "serve"], {
     cwd: repo,
+    env: daemonEnv(process.env),
     stdin: "ignore",
     stdout: log,
     stderr: log,
