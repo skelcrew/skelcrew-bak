@@ -44,9 +44,10 @@ test("the loop keeps its rules through failed saves, restarts and your inputs", 
 
         // 16: every saved command is carried out once the daemon runs, so
         // every task still ends once you answer, resume and retry what waits
-        // on you. A kill ends one early.
+        // on you, and done unless you killed it.
         sim.settle();
-        for (const taskId of tasks) expect(sim.outcome(taskId)).not.toBeNull();
+        const ended: (string | null)[] = ["done", "killed"];
+        for (const taskId of tasks) expect(ended).toContain(sim.outcome(taskId));
         expect(sim.mostAgentsAtOnce).toBeLessThanOrEqual(2);
         expect(sim.tasksMatchTheLog()).toBe(true);
       },
