@@ -54,8 +54,8 @@ export class Loop {
   // Commands handed to the tools whose work hasn't finished, by their id in
   // the outbox.
   private readonly pending = new Map<number, Command>();
-  // Set while an input is handled, so a tool replying from inside carryOut
-  // is caught.
+  // Set by dispatch while it hands commands to the tools. handle refuses any
+  // input while it is set, which catches a tool replying from inside carryOut.
   private busy = false;
   private readonly now: () => number;
 
@@ -106,7 +106,7 @@ export class Loop {
   // holds its slot until its tool finishes.
   get inFlight(): number {
     let count = 0;
-    for (const command of this.pending.values()) if (untracked(command, this)) count++;
+    for (const command of this.pending.values()) if (this.untracked(command)) count++;
     return count;
   }
 
@@ -216,26 +216,26 @@ export class Loop {
     if (!evolved.ok) throw new Error(`evolve refused decide's event: ${evolved.reason}`);
     this.tasks.set(event.taskId, evolved.task);
   }
-}
 
-// Whether a command still under way holds a slot its task no longer records.
-// A start the task still waits for, and a stop it records as stopping, are
-// counted from the task by the scheduler already.
-function untracked(command: Command, loop: Loop): boolean {
-  switch (command.type) {
-    case "start_session":
-    case "create_workspace":
-    case "create_copy": {
-      const task = loop.task(command.taskId);
-      if (task === null || task.phase === "ended") return true;
-      if (command.type === "start_session") return !waitingForSession(task, command.request);
-      return !("request" in task.step && task.step.request === command.request);
+  // Whether a command still under way holds a slot its task no longer
+  // records. A start the task still waits for, and a stop it records as
+  // stopping, are counted from the task by the scheduler already.
+  private untracked(command: Command): boolean {
+    switch (command.type) {
+      case "start_session":
+      case "create_workspace":
+      case "create_copy": {
+        const task = this.task(command.taskId);
+        if (task === null || task.phase === "ended") return true;
+        if (command.type === "start_session") return !waitingForSession(task, command.request);
+        return !("request" in task.step && task.step.request === command.request);
+      }
+      case "stop_session": {
+        const task = this.task(command.taskId);
+        return command.request === null || task?.stopping?.request !== command.request;
+      }
+      default:
+        return false;
     }
-    case "stop_session": {
-      const task = loop.task(command.taskId);
-      return command.request === null || task?.stopping?.request !== command.request;
-    }
-    default:
-      return false;
   }
 }
