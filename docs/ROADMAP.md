@@ -31,7 +31,9 @@ repository over a local socket, which starts if none runs. Agents get their own 
 known by their session token. The tools are still fakes.
 
 Done when a task can be walked through its whole life with `skel` commands, standing in for
-the agents by hand.
+the agents by hand. The simulator then also sends your inputs at random (pauses, kills,
+questions and answers) and delays tools' replies, which milestone 2's property test leaves
+out.
 
 ### 4. First real task
 
@@ -39,7 +41,9 @@ Real agents do the work. Git makes worktrees, the tester's copy and the branch, 
 the sessions, and Claude Code runs each role with its own permissions and protocol preamble.
 
 Done when one real task goes from `skel add` to a branch on this repository: planner,
-builder, tester, delivered.
+builder, tester, delivered. On a restart, the daemon finds its sessions again in tmux,
+reports those that ended while it was down, and stops any it doesn't know, as the spec's
+recovery says.
 
 ### 5. Skelcrew builds itself
 
