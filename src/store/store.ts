@@ -72,12 +72,16 @@ export class EventStore {
   // commands it answers from the outbox: all of it, or none if anything fails
   // its schema. Returns each new command's id, to mark it carried out later.
   append(events: TaskEvent[], commands: Command[] = [], answered: number[] = []): Queued {
-    for (const event of events) {
-      const parsed = parseTaskEvent(readJson(JSON.stringify(event)));
+    // Each is checked as the text that will be saved, so what is saved is
+    // what reads back.
+    const eventRows = events.map((event) => ({ task: event.taskId, body: JSON.stringify(event) }));
+    const commandBodies = commands.map((command) => JSON.stringify(command));
+    for (const { body } of eventRows) {
+      const parsed = parseTaskEvent(readJson(body));
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
     }
-    for (const command of commands) {
-      const parsed = parseCommand(readJson(JSON.stringify(command)));
+    for (const body of commandBodies) {
+      const parsed = parseCommand(readJson(body));
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
     }
     // SQLite can refuse a write, such as on a full disk. The transaction
@@ -89,12 +93,10 @@ export class EventStore {
       );
       const remove = this.db.query("DELETE FROM commands WHERE id = $id");
       const ids = this.db.transaction(() => {
-        for (const event of events) {
-          insert.run({ task: event.taskId, body: JSON.stringify(event) });
-        }
+        for (const row of eventRows) insert.run(row);
         for (const id of answered) remove.run({ id });
-        return commands.map((command) => {
-          const row = queue.get({ body: JSON.stringify(command) });
+        return commandBodies.map((body) => {
+          const row = queue.get({ body });
           if (row === null) throw new Error("SQLite returned no id for a saved command.");
           return row.id;
         });
