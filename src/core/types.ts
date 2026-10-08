@@ -121,7 +121,9 @@ export type BuildStep =
   | { kind: "running"; session: SessionId }
   // The builder has been stopped. A fresh one starts if review asks for changes.
   | { kind: "merging_main"; request: number | null } // null after a failure
-  | Finishing; // only for `try`, which skips review
+  // Only a `try` gets here, since it skips review. The type doesn't stop
+  // other intents.
+  | Finishing;
 
 export type ReviewStep =
   | { kind: "queued" } // after a hold
