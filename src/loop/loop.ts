@@ -145,11 +145,13 @@ export class Loop {
     return { decision, saved: true };
   }
 
-  // Hands commands to the tools.
+  // Hands commands to the tools. Every one is counted as pending before the
+  // first goes out, so the count of slots in flight is whole while they do.
   private dispatch(commands: { command: Command; id: number | undefined }[]): void {
+    const keyed = commands.map((entry) => ({ ...entry, key: this.track(entry.command) }));
     this.busy = true;
     try {
-      for (const { command, id } of commands) this.carryOut(command, id, this.track(command));
+      for (const { command, id, key } of keyed) this.carryOut(command, id, key);
     } finally {
       this.busy = false;
     }
