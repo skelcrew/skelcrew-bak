@@ -5,3 +5,6 @@ node_modules/
 .skelcrew/daemon.pid
 .skelcrew/daemon.sock
 .skelcrew/out/
+# Editor swap files
+*.swp
+*.swo
