@@ -12,6 +12,8 @@ export type Listening = { stop(): Promise<void> };
 // `answer` turns one line into the line to send back.
 export function listen(socket: string, answer: (line: string) => string): Promise<Listening> {
   const server = createServer((connection) => {
+    // Decoded as one stream, so a character split between packets stays whole.
+    connection.setEncoding("utf8");
     let text = "";
     connection.on("data", (chunk) => {
       text += chunk.toString();

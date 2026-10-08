@@ -24,6 +24,8 @@ export function send(socket: string, call: Call, token: string | null = null): P
     // The handlers go on before connecting: Bun can report a missing socket
     // during the connect call itself.
     const connection = new Socket();
+    // Decoded as one stream, so a character split between packets stays whole.
+    connection.setEncoding("utf8");
     connection.on("data", (chunk) => {
       text += chunk.toString();
       const end = text.indexOf("\n");

@@ -114,6 +114,20 @@ describe("the daemon", () => {
     });
   });
 
+  test("reads text whose characters are split between packets", async () => {
+    const daemon = await started(folder());
+    const line = Buffer.from(
+      `${JSON.stringify({ v: 1, id: "1", token: null, call: add("Café") })}\n`,
+    );
+    const cut = line.indexOf(Buffer.from("é")) + 1; // inside the é
+
+    await rawBytes(daemon.socket, [line.subarray(0, cut), line.subarray(cut)]);
+    const listed = await send(daemon.socket, { type: "ls" });
+    expect(listed.ok && listed.result.kind === "tasks" && listed.result.tasks[0]?.title).toBe(
+      "Café",
+    );
+  });
+
   test("answers a line it can't read with a refusal, and stays up", async () => {
     const daemon = await started(folder());
 
@@ -282,6 +296,26 @@ async function untilAsync(done: () => Promise<boolean>): Promise<void> {
 // most.
 async function until(done: () => boolean): Promise<void> {
   for (let waited = 0; !done() && waited < 1_000; waited += 5) await Bun.sleep(5);
+}
+
+// Sends raw bytes in separate writes, a moment apart, and waits for the
+// first line back.
+function rawBytes(socket: string, parts: Buffer[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const connection = connect(socket, async () => {
+      for (const part of parts) {
+        connection.write(part);
+        await Bun.sleep(20);
+      }
+    });
+    connection.on("data", (chunk) => {
+      if (chunk.includes("\n")) {
+        connection.end();
+        resolve();
+      }
+    });
+    connection.on("error", reject);
+  });
 }
 
 // Sends one raw line and returns the first line that comes back.
