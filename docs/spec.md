@@ -27,11 +27,11 @@ Skelcrew is plumbing. It does not try to make agents smarter. It starts vanilla 
 
 **Non goals:** a skill library or prompt framework, an IDE or diff viewer, a task manager, merging or deploying code, agent to agent protocols, team features.
 
-## v1 scope
+## MVP scope
 
-v1 is what's needed to dogfood: one person, one machine, building Skelcrew with Skelcrew.
+The MVP is what's needed to dogfood: one person, one machine, building Skelcrew with Skelcrew.
 
-**In v1**
+**In the MVP**
 
 - Daemon, CLI and the full lifecycle: triage, build, review
 - Intents `ship`, `try`, `answer`; rigor `light`, `full`; the approval flag
@@ -42,7 +42,7 @@ v1 is what's needed to dogfood: one person, one machine, building Skelcrew with 
 - Slots, pausing and starting
 - Event log in SQLite, recovery after restart
 
-**Right after v1**, in order: GitHub (issues in, PRs out, auto merge), the TUI, herdr, notifications.
+**Right after the MVP**, in order: GitHub (issues in, PRs out, auto merge), the TUI, herdr, notifications.
 
 Everything else is in Later.
 
@@ -53,7 +53,7 @@ Everything else is in Later.
 - **Intent**: what the task produces: `ship`, `try` or `answer`.
 - **Rigor**: how much care it gets: `light` or `full`. Plus an **approval** flag for work that needs your sign off.
 - **Role**: who works a phase: planner (triage), builder (build), tester (review). A role is a config entry: instructions, harness, model.
-- **Workspace**: where an agent works. A git worktree in v1.
+- **Workspace**: where an agent works. A git worktree in the MVP.
 - **Session**: an interactive harness running in a workspace, inside tmux. Never headless, so you can always attach.
 - **Event**: everything that happens to a task, in an append only log. State is derived from events.
 - **Plugin**: anything that connects Skelcrew to the outside world.
@@ -109,10 +109,11 @@ Adding a task is the commitment: build this. Skelcrew is an orchestration tool w
 
 `max_running` sets how many agents work at once. A running task holds one slot. A task waiting on you, with you, or paused holds none.
 
-- **Pause** (`skel pause 142`): the agent stops, uncommitted work is committed, the workspace and harness session are kept. The task frees its slot and never restarts on its own.
+- **Pause** (`skel pause 142`): the agent stops, Skelcrew commits any uncommitted work, and the workspace and harness session are kept. The task frees its slot and never restarts on its own.
 - **Resume** (`skel resume 142`): the task goes to the front of the queue, continuing its harness session where it left off.
 - **Start now** (`skel start 145`): starts immediately if a slot is free. If not, `skel start 145 --pause 142` swaps them atomically, so running agents never exceed `max_running`.
 - **Order**: answers to questions first, then resumed tasks, then queued tasks. Oldest first within each.
+- **Starts and stops in flight hold a slot.** A session that has been asked to start holds its slot from the request, not from when it reports in. A session being stopped holds its slot until the stop finishes. Starts in flight are stored, so a restart still counts them.
 
 ## Task lifecycle
 
@@ -137,11 +138,11 @@ flowchart LR
 
 **Endings**: **done** (output handed over), **split** (replaced by proposed tasks), **declined** (handed back with a reason), **killed**, **failed**.
 
-Anything that comes back after done (PR feedback, a production bug) is a new task. State never goes backwards.
+Anything that comes back after done (PR feedback, a production bug) is a new task. Nothing leaves an ending.
 
 ## Intent and rigor
 
-Every task gets two small decisions instead of a list of modes. Their behaviour is fixed in v1, not configurable.
+Every task gets two small decisions instead of a list of modes. Their behaviour is fixed in the MVP, not configurable.
 
 ### Intent: what the task produces
 
@@ -149,7 +150,7 @@ Every task gets two small decisions instead of a list of modes. Their behaviour 
 |---|---|---|---|---|
 | `ship` | a change that goes to production | yes | yes | yes |
 | `try` | a prototype on a branch, plus findings | yes | never | no |
-| `answer` | a report, optionally with proposed tasks | no (read only) | n/a | yes, light |
+| `answer` | a report, optionally with proposed tasks | no (read only) | n/a | yes |
 
 `answer` covers questions about the codebase (why is search slow?), about ideas (what are our options for offline sync?) and designs (how should the export UI work?). If the answer implies work, it proposes tasks rather than starting any.
 
@@ -157,8 +158,8 @@ Every task gets two small decisions instead of a list of modes. Their behaviour 
 
 | Rigor | Triage | Review |
 |---|---|---|
-| `light` | brief only | quick code check |
-| `full` | brief, plus a spec when the planner judges one needed | code review and verification |
+| `light` | brief only | a quick check: of the code for `ship`, of the report for `answer` |
+| `full` | brief, plus a spec when the planner judges one needed | code review and verification for `ship`; for `answer`, the report's claims checked against the code |
 
 **Approval** is a flag, not a level. It means the task waits for your sign off after review, before anything is handed over. The planner sets it for critical work (auth, payments, migrations, or paths listed as `critical` in config), and you can set it with a label or `--approve`.
 
@@ -187,12 +188,13 @@ Every task starts with triage: a short, cheap run by the planner. It's skipped o
 
 ### Output
 
-One `triaged` event with one of four outcomes:
+Triage ends with one `task.triaged` event, with one of three outcomes:
 
 - **proceed**: here's the intent, rigor and brief
-- **ask**: too vague; a question goes to you
 - **split**: really several tasks; proposals go to you, the original ends
 - **decline**: not now or not needed; handed back to the tracker with a reason you can overrule
+
+The planner can also **ask** when the task is too vague. That doesn't end triage: it emits `question.asked`, and the planner continues once you answer.
 
 For proceed:
 
@@ -217,23 +219,47 @@ spec: docs/plans/142-empty-export.md   # only when the planner judged one needed
 
 ## Review
 
-The tester works in its own workspace, checked out from the commit the builder handed over, so nothing the builder does afterwards can change what was checked.
+The tester works in its own workspace, checked out from the commit the builder handed over, so nothing the builder does afterwards can change what was checked. It is a detached worktree (`git worktree add --detach`) at that commit, since git won't check out the task's branch twice. Skelcrew removes it once the verdict is in.
 
 - **Code review**: an adversarial read against the brief and spec. A change can pass every test and still be unsound.
 - **Verification**: run the project with the repo's `setup` and `test` commands, and collect evidence that it works (test results, and screenshots or a preview where it applies). A failing command fails review.
 
 The verdict goes through the daemon. The evidence is part of what done hands over: in the PR description for `ship`, alongside the report for `answer`.
 
+**The checks run the branch's own code.** `setup` and `test` come from config, but `bun test` runs whatever scripts and test files the branch holds, so a builder could make its own checks pass. The tester treats a change to tests, test scripts or check config as something to review closely, and says so in its findings.
+
 ## Workspaces
 
 A workspace always holds a checkout of the repo on the task's branch, read only for `answer`. Skelcrew treats every workspace the same: create, start a session, attach, run commands, stop, remove.
 
-**v1: worktrees, isolation `none`.** The harness runs as you on your machine. Two things add some protection:
+**MVP: worktrees, isolation `none`.** The harness runs as you on your machine. Two things add some protection:
 
 - **The harness's own sandbox** (limiting shell commands' file and network access) is on by default.
 - **Agents get no credentials of their own.** Without a container they may still find yours on disk, so this is a speed bump, not a wall.
 
+**Permissions per role.** Every session starts with the harness in a mode that refuses anything that would ask, since nobody is there to answer, plus an explicit allow list. For Claude Code that is `--permission-mode dontAsk` and `--settings` with:
+
+- **planner, tester, and any role on an `answer` task**: `skel` commands only, plus the repo's `setup` and `test` commands for the tester. No file edits.
+- **builder**: also edits inside its own worktree, `git add` and `git commit`. A commit with `--no-verify` is denied.
+
+This is how "`answer` never starts a session with edit permissions" holds by capability rather than instruction.
+
+**Folder trust stays yours.** Before starting a session, Skelcrew checks that the harness already trusts the repository. It never grants trust itself. If the repository isn't trusted, the session isn't started, and you're told how to fix it.
+
 Under `none`, the rules hold for agents that use Skelcrew's protocol, but an agent that goes around Skelcrew can do anything you can. The TUI says so. Real enforcement comes with the `local` (container) and `remote` isolation levels in Later.
+
+## Sessions
+
+A session is a harness running interactively in a workspace, inside tmux. The session runner (tmux) and the harness profile (Claude Code) split the work: the runner holds terminals, the profile knows the harness.
+
+- **Start.** Skelcrew picks the harness session ID up front (`claude --session-id <uuid>`) and stores it on the task. The transcript, usage and resume are all found through it. The session gets `SKELCREW_SESSION` and `SKELCREW_TASK` in its environment. Claude Code's own child session variables are removed, or it writes no transcript.
+- **tmux.** Skelcrew runs its own tmux server per repository (`-L skelcrew-<hash>`, `-f /dev/null`), so your own tmux setup is never touched. Panes stay after their process exits (`remain-on-exit`), so Skelcrew can read the exit code and the last lines of output. After a restart, the daemon finds its sessions again with `list-panes -a`.
+- **Attach.** `skel attach 142` attaches to the session with `ctrl-]` bound to detach.
+- **Messages in** (answers, nudges). The runner types the text literally (`send-keys -l`), then sends Enter on its own. The Claude Code profile wraps the text in bracketed paste marks, after stripping control codes; otherwise Claude Code treats a long message as a paste, and Enter only adds a new line. A trailing `;` is escaped, or tmux reads it as a command separator.
+- **Stop.** SIGTERM to the pane's process group, then SIGKILL, then the tmux session is killed. Before a stop for pause or kill, before merging main in, and before removing a workspace, Skelcrew commits any uncommitted work itself (`git add --all` and a commit), so no work is lost.
+- **Resume.** A paused or crashed session comes back with `claude --resume <uuid>` in the same workspace, so it keeps its context.
+- **Usage.** The profile reads the transcript (`~/.claude/projects/*/<uuid>.jsonl`). Tokens are input, output and cache writes, counted once per message; cache reads are kept separately, since they would swamp the rest. Working minutes count from each prompt to the agent's last line before the next one, so waiting time doesn't count. Usage is read every few minutes and when a session ends.
+- **Activity.** The transcript is also the activity signal: a session with no new transcript line for 20 minutes, and no open question, has stalled.
 
 ## Agent protocol
 
@@ -261,7 +287,10 @@ skel changes findings.md
 - **Who is calling.** Each session gets a secret token in an environment variable. The daemon maps it to a task, role and phase, and refuses anything outside them: a builder can't pass its own review. No token means the human. (Not a lock under `none`, see Workspaces.)
 - **One open question per task.**
 - **Short replies**, like chat messages.
-- **Commands block** until accepted or rejected.
+- **Commands answer at once with accepted or rejected**, except `done`.
+- **`ask` doesn't wait for your answer.** It returns once the question is recorded, and the agent ends its turn. Your answer is typed into its session later, once it has a slot again.
+- **`done` waits for the outcome:** review's verdict, or done when the intent has no review. So the builder hears the result in its own session, which matters when you're attached and working with it.
+- **The session token is not the request number.** The token says who is calling. The request number (see Core model) says which request a reply belongs to.
 
 ## Core model
 
@@ -273,7 +302,7 @@ evolve(state, event)         -> state
 ```
 
 - **No hidden inputs.** Time and IDs are passed in, so replay reproduces bugs exactly.
-- **Request numbers.** Every command expecting a reply carries a number from a counter on the task; a late or repeated reply is refused, so finished work can't hijack a task that has moved on.
+- **Request numbers.** Every command expecting a reply (start a session, create a workspace, merge main, deliver output) carries a number from a counter on the task. A late or repeated reply is refused, so finished work can't hijack a task that has moved on. A late reply is also cleaned up: a session that starts late is stopped, and a workspace created late is removed. A report that a session ended names the session, so an old session's end can't fail the current one.
 
 ### Task state
 
@@ -306,19 +335,26 @@ type Task = {
 | Event | Meaning |
 |---|---|
 | `task.received` | a task arrived |
-| `task.triaged` | proceed, ask, split or decline |
+| `task.triaged` | proceed, split or decline |
 | `task.set` | you changed intent, rigor or approval |
-| `phase.started` | a role's session started |
-| `question.asked` / `question.answered` | an agent asked; you answered |
-| `session.attached` / `session.detached` | you stepped in or out |
+| `phase.started` | the task entered triage, build or review |
+| `workspace.created` / `workspace.removed` | a workspace was made or cleaned up |
+| `workspace.failed` | a workspace couldn't be created |
+| `session.started` / `session.ended` | a role's harness session started or ended; `ended` carries a reason: `reported`, `stopped` (pause, kill) or `crashed` (ended without reporting) |
+| `session.failed` | a session couldn't be started |
+| `question.asked` / `question.answered` | an agent asked (including the planner's ask); you answered |
+| `session.attached` / `session.detached` | you stepped in or out; `detached` carries your choice: `resume` or `hand_over` |
 | `task.paused` / `task.resumed` / `task.started` | you paused, resumed or started a task |
 | `build.done` | the builder handed over |
 | `main.merged` / `main.conflict` | the branch was brought up to date with main |
 | `review.passed` / `review.changes_requested` | the tester's verdict |
 | `approval.given` / `approval.denied` | your sign off |
+| `proposals.approved` / `proposals.denied` | your call on tasks proposed by a split or an answer; each approved one arrives as its own `task.received` |
 | `output.delivered` | the output plugin confirmed; the task is done |
-| `agent.stalled` / `agent.crashed` | a session went quiet or ended without reporting |
-| `task.killed` / `task.failed` | you stopped it, or it ran out of retries or budget |
+| `output.failed` | a delivery attempt failed; retried with backoff |
+| `agent.stalled` / `agent.nudged` | a session went quiet; it got its one nudge |
+| `limit.reached` | a retry, loop cap or budget ran out; the task waits on you |
+| `task.killed` / `task.failed` | you stopped it, or you gave up on it after a limit was reached |
 
 Events are versioned from day one.
 
@@ -340,12 +376,12 @@ Property tested, and approved before implementation:
 
 ## Keeping up with main
 
-Before review, the daemon merges main into the task branch. Conflicts go back to the builder, so the tester always checks against current main. After done, the PR and CI handle drift. Skelcrew never force pushes.
+Before review, the daemon merges main into the task branch, in the builder's worktree, after committing any uncommitted work. On a conflict the merge is left unfinished for the builder to complete, so the tester always checks against current main. After done, the PR and CI handle drift. Skelcrew never force pushes.
 
 ## Failure handling
 
 - **Crash** (session ends without reporting): one automatic retry with a fresh session, then waiting on you.
-- **Stall** (no activity for 20 minutes): one nudge, then waiting on you.
+- **Stall** (no new transcript line for 20 minutes, with no open question): one nudge, then waiting on you.
 - **Loop cap** (3 build and review round trips): waiting on you, with the tester's findings.
 - **Budget** (working minutes, counted only while an agent works): waiting on you. Placeholders until dogfooding: 30 minutes for `light`, 2 hours for `full`.
 - **Workspace or session fails to start**: one retry, then waiting on you.
@@ -375,7 +411,7 @@ SQLite on the machine running the daemon.
 
 Plugin kinds: task sources, outputs, harnesses, workspaces, session runners, notifications.
 
-**GitHub output** (right after v1): on done, open a PR from the reviewed branch with the evidence in its description. With `auto_merge: true` (off by default) it enables GitHub's auto merge but never merges directly; branch protection, CI and CODEOWNERS decide what lands.
+**GitHub output** (right after the MVP): on done, open a PR from the reviewed branch with the evidence in its description. With `auto_merge: true` (off by default) it enables GitHub's auto merge but never merges directly; branch protection, CI and CODEOWNERS decide what lands.
 
 ## Human interface
 
@@ -406,7 +442,7 @@ skel start 145 [--pause 142]
 skel kill 142
 ```
 
-### TUI (right after v1)
+### TUI (right after the MVP)
 
 A glance and act surface, not a workspace.
 
@@ -437,7 +473,7 @@ Needs you first; if that section is empty, close the TUI. One quiet line per tas
 Entering chat mode is attaching to the task's session.
 
 - The task moves to with you; the loop leaves it alone.
-- Detaching hands it back to its phase, moves it to review, or marks it done.
+- Detaching does one of two things, which you choose: **resume** hands the task back to its phase, where the agent carries on; **hand over** treats the work as handed over (as if the builder ran `skel done`), so it moves to review, or to done when the intent has no review. Approval still applies.
 - The conversation is part of the task's history.
 - If the session has ended, the harness's resume reopens it with full context.
 
@@ -447,7 +483,7 @@ Skelcrew doesn't show diffs. `skel path` and `skel open` take you to the worktre
 
 Watching diffs is optional: the tester's findings and evidence are the default way of knowing what happened.
 
-## Configuration (v1)
+## Configuration (MVP)
 
 ```yaml
 # skelcrew.yaml
@@ -482,12 +518,12 @@ limits:
 
 ## Build plan
 
-Start over rather than rewriting v1, but carry its lessons.
+Start over rather than rewriting v3, but carry its lessons.
 
 1. **Core, attended.** Types, events and invariants approved first, then the reducer with a test per transition, property tests, and a simulator that runs whole lifecycles with scripted replies.
 2. **Smallest real loop.** `skel add` → planner → builder in a worktree with tmux → tester in its own worktree → a branch.
-3. **Dogfood.** v2 builds the rest of v2. Freeze v1.
-4. **Right after v1:** GitHub, the TUI, herdr, notifications.
+3. **Dogfood.** The MVP builds the rest of Skelcrew. v3 is frozen.
+4. **Right after the MVP:** GitHub, the TUI, herdr, notifications.
 
 Track from step 3: questions per task, minutes spent on decisions, tester catch rate, tasks reaching done without you, cost per task.
 
@@ -509,3 +545,6 @@ Track from step 3: questions per task, minutes spent on decisions, tester catch 
 - What does verification evidence look like per project type?
 - The plugin interface: process per plugin or in process modules, and how third party plugins are trusted.
 - Current plugin surfaces of herdr and other tools need checking before committing.
+- The file formats for the brief, summary, report, evidence, findings and proposed tasks (`tasks.md`).
+- Resuming a harness session (`claude --resume`) is untested: v3 always started fresh. Does a resumed session keep its permissions and pick up a message typed in straight away?
+- Should a change to tests or check config count as critical, so it always needs your approval?
