@@ -47,6 +47,18 @@ for you. The first three are proven by a script that walks the core through them
       retires the command and leaves the task waiting forever. Not the core, so it is
       fixed in milestone 3.
 
+## From the milestone 3 reviews, for later
+
+- [ ] **The core accepts an empty proposals decision**, one that decides nothing. The daemon
+      refuses it first, but the core should too. Yours, since it is the core.
+- [ ] **Approved proposals are added as tasks after the decision is saved**, not with it. A
+      crash in between loses the new tasks. Saving both together needs the core to emit the
+      new tasks, so it is yours too.
+- [ ] **`skel ls` returns every task in one answer.** Past about a million bytes, the answer
+      is refused. Page it, or leave ended tasks out, before the list grows that long.
+- [ ] **Picking some of a split's proposals**, rather than all or none, waits for a way to
+      show them, such as the TUI.
+
 ## Milestone 3: daemon and CLI
 
 A draft, for review before any of it is built. In order, each one usable by the next.
