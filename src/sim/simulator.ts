@@ -25,7 +25,10 @@ export type Behaviour = {
   intent?: Intent;
   changes?: number; // how many times the tester asks for changes
   conflicts?: number; // how many times merging main conflicts
+  asks?: number; // how many questions the builder asks you
 };
+
+type Role = "planner" | "builder" | "tester";
 
 // Something waiting to reach the loop: a tool's reply to a command, handed
 // to the loop's reply function, or an agent's next report, sent as an input.
@@ -66,6 +69,9 @@ export class Simulator {
   private readonly behaviours = new Map<TaskId, Required<Behaviour>>();
   private readonly live = new Set<SessionId>();
   private readonly started = new Set<string>(); // "task:request" of each session started
+  // Each agent's task and role, by its session, to wake it when your answer
+  // is typed in.
+  private readonly agents = new Map<SessionId, { taskId: TaskId; role: Role }>();
   // The fake tools. A task's merge conflicts as many times as its
   // behaviour says.
   private readonly fakes = new FakeTools((taskId) => {
@@ -109,6 +115,7 @@ export class Simulator {
       intent: behaviour.intent ?? "ship",
       changes: behaviour.changes ?? 0,
       conflicts: behaviour.conflicts ?? 0,
+      asks: behaviour.asks ?? 0,
     });
     const input: Input = {
       by: "you",
@@ -166,8 +173,13 @@ export class Simulator {
     // and comes back if the save fails.
     const stops = job.kind === "reply" ? job.stops : null;
     if (stops !== null) this.live.delete(stops);
-    if (job.kind === "input") this.loop.send(job.taskId, job.input);
-    else if (job.retry) this.loop.retryReplies();
+    if (job.kind === "input") {
+      const decision = this.loop.send(job.taskId, job.input);
+      // An agent that asked waits on you, idle, and holds no slot.
+      if (decision.ok && job.input.by === "agent" && job.input.type === "ask") {
+        this.live.delete(job.input.session);
+      }
+    } else if (job.retry) this.loop.retryReplies();
     else job.reply(job.input);
     if (!this.saveFailed) return true;
     if (stops !== null) this.live.add(stops);
@@ -215,6 +227,30 @@ export class Simulator {
     this.queue.push(...agents);
   }
 
+  // The tasks with a question open for you.
+  waitingForYou(): TaskId[] {
+    return this.loop
+      .all()
+      .filter((task) => task.question !== null)
+      .map((task) => task.id);
+  }
+
+  // Ends the run as you would: no more failed saves, and every open question
+  // answered, paused task resumed and held one retried, until all have ended.
+  settle(): void {
+    this.calm();
+    for (let round = 0; round < 100; round++) {
+      const open = this.loop.all().filter((task) => task.phase !== "ended");
+      if (open.length === 0) return;
+      for (const task of open) {
+        if (task.question !== null) this.send(task.id, { by: "you", type: "reply", text: "Yes." });
+        else if (task.hold?.kind === "paused") this.send(task.id, { by: "you", type: "resume" });
+        else if (task.hold !== null) this.send(task.id, { by: "you", type: "retry" });
+      }
+      this.run();
+    }
+  }
+
   // How the task ended, or null while it hasn't.
   outcome(taskId: TaskId): string | null {
     const task = this.loop.task(taskId);
@@ -258,6 +294,18 @@ export class Simulator {
       retry: false,
     });
     if (command.type === "start_session") this.startAgent(command);
+    if (command.type === "type_into_session") this.wake(command.session);
+  }
+
+  // Your answer is typed into an agent's session: it works again, and
+  // reports what it does next.
+  private wake(session: SessionId): void {
+    const agent = this.agents.get(session);
+    if (agent === undefined) return;
+    this.live.add(session);
+    this.mostAgentsAtOnce = Math.max(this.mostAgentsAtOnce, this.live.size);
+    const next = this.agent(agent.taskId, agent.role, session);
+    this.queue.push({ kind: "input", taskId: agent.taskId, input: next });
   }
 
   // Starts the agent for a session, unless it already started: a start sent
@@ -267,6 +315,7 @@ export class Simulator {
     if (this.started.has(key)) return;
     this.started.add(key);
     const session = sessionOf(command);
+    this.agents.set(session, { taskId: command.taskId, role: command.role });
     this.live.add(session);
     this.mostAgentsAtOnce = Math.max(this.mostAgentsAtOnce, this.live.size);
     const next = this.agent(command.taskId, command.role, session);
@@ -278,7 +327,7 @@ export class Simulator {
   // ---------------------------------------------------------------------------
 
   // What an agent of this role reports once it has done its work.
-  private agent(taskId: TaskId, role: "planner" | "builder" | "tester", session: SessionId): Input {
+  private agent(taskId: TaskId, role: Role, session: SessionId): Input {
     const behaviour = this.behaviour(taskId);
     switch (role) {
       case "planner":
@@ -290,6 +339,16 @@ export class Simulator {
           spec: null,
         };
       case "builder": {
+        if (behaviour.asks > 0) {
+          behaviour.asks--;
+          return {
+            by: "agent",
+            session,
+            type: "ask",
+            text: "Which way?",
+            options: ["This", "That"],
+          };
+        }
         const branch = this.fakes.branch();
         if (behaviour.intent === "answer") {
           return {

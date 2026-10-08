@@ -64,3 +64,28 @@ describe("a command sent again after a restart", () => {
     expect(sim.events(task(1)).filter((type) => type === "main.conflict")).toHaveLength(1);
   });
 });
+
+describe("a builder that asks", () => {
+  test("waits for your answer, then carries on to done", () => {
+    const sim = new Simulator(config);
+    sim.add(task(1), { asks: 1 });
+    sim.run();
+
+    expect(sim.outcome(task(1))).toBeNull();
+    expect(sim.waitingForYou()).toEqual([task(1)]);
+
+    sim.settle();
+    expect(sim.outcome(task(1))).toBe("done");
+  });
+
+  // An agent waiting on you holds no slot, so another task can start.
+  test("frees its slot while it waits", () => {
+    const sim = new Simulator({ ...config, maxRunning: 1 });
+    sim.add(task(1), { asks: 1 });
+    sim.add(task(2));
+    sim.run();
+
+    expect(sim.outcome(task(2))).toBe("done");
+    expect(sim.mostAgentsAtOnce).toBe(1);
+  });
+});
