@@ -73,7 +73,7 @@ type World = {
   lastInput?: Input; // for debugging a failure
 };
 
-export function newWorld(config: Config, id = TaskId.parse(142)): World {
+function newWorld(config: Config, id = TaskId.parse(142)): World {
   return {
     id,
     config,
@@ -372,7 +372,7 @@ function movesOn(input: Input): boolean {
   return !(input.type === "stopped" && input.saved === "save_failed");
 }
 
-export function step(world: World, choice: Choice, at: number): void {
+function step(world: World, choice: Choice, at: number): void {
   const all = candidates(world);
   const envelope = (input: Input) => ({ taskId: world.id, at, input });
   const records = (input: Input) => {
