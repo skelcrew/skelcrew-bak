@@ -16,7 +16,7 @@ Parts marked _planned_ don't exist yet.
 | Daemon | `src/daemon/` | One per repository, held by a lock. Holds the loop, answers the CLI over a local socket, and carries out commands through the plugins. |
 | Protocol | `src/protocol/` | The versioned messages between the CLI and the daemon, checked by Zod on both sides. |
 | Config | `src/config/` | Reads `skelcrew.yaml`, checked by Zod. |
-| CLI | `src/cli/` _planned_ | `skel`, for you and for agents. Holds no state. |
+| CLI | `src/cli/` | `skel`, for you and for agents. Holds no state, and starts the daemon if none runs. |
 | Plugins | `src/plugins/` _planned_ | The harness (Claude Code), the session runner (tmux), git, and outputs. |
 | Checks | `src/checks/` | The test watchdog, which stops a hung test run. |
 
