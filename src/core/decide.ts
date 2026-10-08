@@ -14,6 +14,7 @@ import {
   deliver,
   type Effects,
   mergeMain,
+  removeWorkspace,
   startBuilder,
   startCopy,
   startPlanner,
@@ -291,8 +292,9 @@ function lifecycle(
       const goesWithStop = stop.events.length > 0 && task.phase !== "review";
       const starting = task.step.kind === "starting";
       if (workspace !== null && !goesWithStop && task.stopping === null && !starting) {
-        events.push({ type: "workspace.removed", path: workspace.path });
-        commands.push({ type: "remove_workspace", path: workspace.path, deleteBranch: false });
+        const removal = removeWorkspace(workspace.path);
+        events.push(...removal.events);
+        commands.push(...removal.commands);
       }
       // The tester's copy goes too. A working tester's stop removes it.
       if (task.phase === "review" && task.copy !== null && stop.events.length === 0) {
@@ -526,10 +528,7 @@ function afterStop(task: Task, removed: string | null, unsaved: boolean): Effect
   if (task.phase === "ended") {
     const { kept } = task;
     if (kept === null || kept.path === removed || unsaved) return none;
-    return {
-      events: [{ type: "workspace.removed", path: kept.path }],
-      commands: [{ type: "remove_workspace", path: kept.path, deleteBranch: false }],
-    };
+    return removeWorkspace(kept.path);
   }
   if (task.phase !== "build" || task.step.kind !== "awaiting_stop" || task.hold !== null) {
     return none;
@@ -1046,13 +1045,10 @@ function signOffAndDelivery(
       const wrong = deliveryMismatch(task, input.delivered);
       if (wrong !== null)
         return ctx.accept([held({ kind: "failed", step: "delivery", message: wrong })]);
-      const events: EventBody[] = [{ type: "output.delivered", delivered: input.delivered }];
-      const commands: Command[] = [];
-      if (task.workspace !== null && !task.unsaved) {
-        events.push({ type: "workspace.removed", path: task.workspace.path });
-        commands.push({ type: "remove_workspace", path: task.workspace.path, deleteBranch: false });
-      }
-      return ctx.accept(events, commands);
+      const done: EventBody = { type: "output.delivered", delivered: input.delivered };
+      if (task.workspace === null || task.unsaved) return ctx.accept([done]);
+      const removal = removeWorkspace(task.workspace.path);
+      return ctx.accept([done, ...removal.events], removal.commands);
     }
 
     case "delivery_failed":

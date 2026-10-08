@@ -27,6 +27,14 @@ export function createWorkspace(task: Task, request: number): Effects {
   };
 }
 
+// Removes the task's workspace. Its branch stays, since it holds the work.
+export function removeWorkspace(path: string): Effects {
+  return {
+    events: [{ type: "workspace.removed", path }],
+    commands: [{ type: "remove_workspace", path, deleteBranch: false }],
+  };
+}
+
 // Brings the branch up to date with main, in the builder's workspace.
 export function mergeMain(task: Task, workspace: Workspace, request: number): Effects {
   return {
