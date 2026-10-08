@@ -93,7 +93,7 @@ flowchart TB
 - **Plugins** connect the daemon to the outside world. Agents never talk to the tracker, GitHub or you directly.
 - **Agents** get their context when a session starts and act only through `skel` commands. Messages into a session (answers, nudges) go through the session runner.
 
-The core is small enough to be a few hundred lines.
+The reducer is small enough to be a few hundred lines. The daemon around it isn't: slot accounting, recovery and the outbox are real work.
 
 ## Queue, not backlog
 
@@ -538,12 +538,13 @@ limits:
 
 Start over rather than rewriting v3, but carry its lessons.
 
-1. **Core, attended.** Types, events and invariants approved first, then the reducer with a test per transition, property tests, and a simulator that runs whole lifecycles with scripted replies.
-2. **Smallest real loop.** `skel add` → planner → builder in a worktree with tmux → tester in its own worktree → a branch.
-3. **Dogfood.** The MVP builds the rest of Skelcrew. v3 is frozen.
-4. **Right after the MVP:** GitHub, the TUI, herdr, notifications.
+1. **Test the unknowns first.** v3 never built resume, the tester, or stall detection, so nothing has tested them. Before building on them, check with throwaway scripts that a resumed harness session keeps its permissions and takes a typed message, that `done` can wait as long as a tester agent runs, and that the transcript tells a working agent from a stalled one. The answers can change the core's events and steps.
+2. **Core, attended.** Types, events and invariants approved first, then the reducer with a test per transition, property tests, and a simulator that runs whole lifecycles with scripted replies.
+3. **Smallest real loop.** `skel add` → planner → builder in a worktree with tmux → tester in its own worktree → a branch.
+4. **Dogfood.** The MVP builds the rest of Skelcrew. v3 is frozen.
+5. **Right after the MVP:** GitHub, the TUI, herdr, notifications.
 
-Track from step 3: questions per task, minutes spent on decisions, tester catch rate, tasks reaching done without you, cost per task.
+Track from step 4: questions per task, minutes spent on decisions, tester catch rate, tasks reaching done without you, cost per task.
 
 ## Later
 
