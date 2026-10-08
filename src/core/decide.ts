@@ -624,9 +624,7 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
     // planner is stopped, and the builder starts once the stop is confirmed.
     // A spec is committed by Skelcrew meanwhile, since the planner can't edit.
     case "triage_proceed": {
-      if (task.question !== null) {
-        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
-      }
+      if (task.question !== null) return ctx.reject(waitForAnswer(task));
       const { override, workspace } = task;
       if (workspace === null) return ctx.reject(`#${task.id} has no workspace.`);
       const plan: Plan = {
@@ -660,9 +658,7 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
     // branch are removed with it, since nothing was built.
     case "triage_split":
     case "triage_decline": {
-      if (task.question !== null) {
-        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
-      }
+      if (task.question !== null) return ctx.reject(waitForAnswer(task));
       if (task.workspace === null) return ctx.reject(`#${task.id} has no workspace.`);
       const remove = { path: task.workspace.path, deleteBranch: true };
       const stop = stopAgent(task, input.session, next(task), false, remove);
@@ -717,9 +713,7 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
     // hands over a report instead of a change, and never edits.
     case "done":
     case "done_answer": {
-      if (task.question !== null) {
-        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
-      }
+      if (task.question !== null) return ctx.reject(waitForAnswer(task));
       const answer = task.plan.intent === "answer";
       if (answer && input.type === "done") {
         return ctx.reject(`#${task.id} is an answer task. Hand it over with a report.`);
@@ -828,9 +822,7 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
     // The tester is stopped and its copy removed. The verdict names the
     // commit it covers, which is the one that is delivered.
     case "pass": {
-      if (task.question !== null) {
-        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
-      }
+      if (task.question !== null) return ctx.reject(waitForAnswer(task));
       const stop = stopTester(task, input.session, next(task), true);
       const passed: EventBody = {
         type: "review.passed",
@@ -856,9 +848,7 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
     // tester's stop is confirmed. That is a loop, and at the cap the task
     // waits for you.
     case "changes": {
-      if (task.question !== null) {
-        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
-      }
+      if (task.question !== null) return ctx.reject(waitForAnswer(task));
       const stop = stopTester(task, input.session, next(task), true);
       const asked: EventBody = { type: "review.changes_requested", findings: input.findings };
       if (task.loops + 1 >= ctx.config.loopCap) {
@@ -1146,6 +1136,12 @@ function waitingForMerge(task: TaskIn<"build">, request: number): boolean {
 // this one and the one after.
 function next(task: Task): number {
   return task.requests + 1;
+}
+
+// Why an agent's report that moves the task on is refused: the agent asked
+// you something, and goes on only once it has your answer.
+function waitForAnswer(task: Task): string {
+  return `#${task.id} has an open question. Wait for the answer.`;
 }
 
 // Why a reply is refused: it answers a request the task isn't waiting on.
