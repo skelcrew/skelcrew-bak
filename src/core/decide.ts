@@ -234,15 +234,9 @@ function lifecycle(
     case "start_now": {
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
       if (task.hold !== null) return ctx.reject(`#${task.id} is held.`);
+      // A task whose last agent is still stopping isn't waiting for a slot,
+      // so two agents never work on it at once.
       if (!waitingForSlot(task)) return ctx.reject(`#${task.id} isn't waiting for a slot.`);
-      // Two agents never work on a task at once, so the last one's stop is
-      // confirmed first. The scheduler skips such a task, and your start_now
-      // waits: the CLI sends it again.
-      if (task.stopping !== null) {
-        return ctx.reject(
-          `#${task.id} is still stopping its last agent. Start waits until it has.`,
-        );
-      }
       const go = task.step.kind === "queued" ? carryOn(task) : resend(task);
       const yours: EventBody[] = input.type === "start_now" ? [{ type: "task.started_now" }] : [];
       return ctx.accept([...yours, ...go.events], go.commands);
