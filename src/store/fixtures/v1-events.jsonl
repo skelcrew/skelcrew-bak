@@ -1,0 +1,152 @@
+{"type":"task.received","title":"Fix empty export","description":"Crashes on empty reports.","source":{"kind":"local"},"plan":null,"v":1,"taskId":1,"at":1000}
+{"type":"workspace.requested","request":1,"tester":false,"v":1,"taskId":1,"at":1000}
+{"type":"workspace.created","workspace":{"path":"/repo/.skelcrew/worktrees/142-fix-empty-export","branch":"skel/142-fix-empty-export"},"v":1,"taskId":1,"at":1000}
+{"type":"session.requested","request":2,"role":"planner","v":1,"taskId":1,"at":1000}
+{"type":"session.started","session":"session-planner","v":1,"taskId":1,"at":1000}
+{"type":"question.asked","question":{"session":"session-planner","text":"Include archived rows?","options":["Yes","No"],"askedAt":1000},"v":1,"taskId":1,"at":1000}
+{"type":"answer.kept","text":"Yes","v":1,"taskId":1,"at":1000}
+{"type":"question.answered","text":"Yes","v":1,"taskId":1,"at":1000}
+{"type":"task.triaged","outcome":"proceed","plan":{"intent":"ship","rigor":"full","approve":false,"brief":"Empty reports crash. Look in the CSV writer.","specPath":null},"spec":{"text":"# Spec","request":4},"v":1,"taskId":1,"at":1000}
+{"type":"session.stopping","session":"session-planner","request":3,"saves":false,"removes":null,"v":1,"taskId":1,"at":1000}
+{"type":"session.stopped","session":"session-planner","saved":"nothing_to_save","v":1,"taskId":1,"at":1000}
+{"type":"spec.committed","path":"docs/plans/1.md","v":1,"taskId":1,"at":1000}
+{"type":"session.requested","request":5,"role":"builder","v":1,"taskId":1,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":1,"at":1000}
+{"type":"agent.progress","session":"session-builder","text":"Found it.","v":1,"taskId":1,"at":1000}
+{"type":"usage.recorded","session":"session-builder","usage":{"tokens":5000,"cacheReads":0,"workingMs":60000},"v":1,"taskId":1,"at":1000}
+{"type":"build.done","handover":{"kind":"summary","text":"Empty reports now export a header row.","branch":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]}},"v":1,"taskId":1,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":6,"saves":true,"removes":null,"v":1,"taskId":1,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"saved","v":1,"taskId":1,"at":1000}
+{"type":"main.requested","request":7,"v":1,"taskId":1,"at":1000}
+{"type":"main.conflict","files":["src/export/csv.ts"],"v":1,"taskId":1,"at":1000}
+{"type":"session.requested","request":8,"role":"builder","v":1,"taskId":1,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":1,"at":1000}
+{"type":"build.done","handover":{"kind":"summary","text":"Empty reports now export a header row.","branch":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]}},"v":1,"taskId":1,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":9,"saves":true,"removes":null,"v":1,"taskId":1,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"saved","v":1,"taskId":1,"at":1000}
+{"type":"main.requested","request":10,"v":1,"taskId":1,"at":1000}
+{"type":"main.merged","reviewed":{"head":"cccccccccccccccccccccccccccccccccccccccc","changedFiles":["src/export/csv.ts"]},"v":1,"taskId":1,"at":1000}
+{"type":"workspace.requested","request":11,"tester":true,"v":1,"taskId":1,"at":1000}
+{"type":"copy.created","copy":{"path":"/repo/.skelcrew/review/142","commit":"cccccccccccccccccccccccccccccccccccccccc"},"v":1,"taskId":1,"at":1000}
+{"type":"session.requested","request":12,"role":"tester","v":1,"taskId":1,"at":1000}
+{"type":"session.started","session":"session-tester","v":1,"taskId":1,"at":1000}
+{"type":"review.changes_requested","findings":"The header row is missing its last column.","v":1,"taskId":1,"at":1000}
+{"type":"session.stopping","session":"session-tester","request":13,"saves":false,"removes":"/repo/.skelcrew/review/142","v":1,"taskId":1,"at":1000}
+{"type":"session.stopped","session":"session-tester","saved":"nothing_to_save","v":1,"taskId":1,"at":1000}
+{"type":"session.requested","request":14,"role":"builder","v":1,"taskId":1,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":1,"at":1000}
+{"type":"build.done","handover":{"kind":"summary","text":"Empty reports now export a header row.","branch":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]}},"v":1,"taskId":1,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":15,"saves":true,"removes":null,"v":1,"taskId":1,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"saved","v":1,"taskId":1,"at":1000}
+{"type":"main.requested","request":16,"v":1,"taskId":1,"at":1000}
+{"type":"main.merged","reviewed":{"head":"cccccccccccccccccccccccccccccccccccccccc","changedFiles":["src/export/csv.ts"]},"v":1,"taskId":1,"at":1000}
+{"type":"workspace.requested","request":17,"tester":true,"v":1,"taskId":1,"at":1000}
+{"type":"copy.created","copy":{"path":"/repo/.skelcrew/review/142","commit":"cccccccccccccccccccccccccccccccccccccccc"},"v":1,"taskId":1,"at":1000}
+{"type":"session.requested","request":18,"role":"tester","v":1,"taskId":1,"at":1000}
+{"type":"session.started","session":"session-tester","v":1,"taskId":1,"at":1000}
+{"type":"review.passed","commit":"cccccccccccccccccccccccccccccccccccccccc","evidence":"bun test: 212 pass","v":1,"taskId":1,"at":1000}
+{"type":"session.stopping","session":"session-tester","request":19,"saves":false,"removes":"/repo/.skelcrew/review/142","v":1,"taskId":1,"at":1000}
+{"type":"output.requested","request":20,"v":1,"taskId":1,"at":1000}
+{"type":"session.stopped","session":"session-tester","saved":"nothing_to_save","v":1,"taskId":1,"at":1000}
+{"type":"output.delivered","delivered":{"kind":"branch","commit":"cccccccccccccccccccccccccccccccccccccccc","ref":"skel/142-fix-empty-export"},"v":1,"taskId":1,"at":1000}
+{"type":"workspace.removed","path":"/repo/.skelcrew/worktrees/142-fix-empty-export","v":1,"taskId":1,"at":1000}
+{"type":"task.received","title":"Fix button color","description":null,"source":{"kind":"local"},"plan":{"intent":"ship","rigor":"full","approve":true,"brief":"Fix button color","specPath":null},"v":1,"taskId":2,"at":1000}
+{"type":"workspace.requested","request":1,"tester":false,"v":1,"taskId":2,"at":1000}
+{"type":"workspace.created","workspace":{"path":"/repo/.skelcrew/worktrees/142-fix-empty-export","branch":"skel/142-fix-empty-export"},"v":1,"taskId":2,"at":1000}
+{"type":"session.requested","request":2,"role":"builder","v":1,"taskId":2,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":2,"at":1000}
+{"type":"session.attached","v":1,"taskId":2,"at":1000}
+{"type":"session.detached","choice":"resume","v":1,"taskId":2,"at":1000}
+{"type":"build.done","handover":{"kind":"summary","text":"Empty reports now export a header row.","branch":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]}},"v":1,"taskId":2,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":3,"saves":true,"removes":null,"v":1,"taskId":2,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"saved","v":1,"taskId":2,"at":1000}
+{"type":"main.requested","request":4,"v":1,"taskId":2,"at":1000}
+{"type":"main.merged","reviewed":{"head":"cccccccccccccccccccccccccccccccccccccccc","changedFiles":["src/export/csv.ts"]},"v":1,"taskId":2,"at":1000}
+{"type":"workspace.requested","request":5,"tester":true,"v":1,"taskId":2,"at":1000}
+{"type":"copy.created","copy":{"path":"/repo/.skelcrew/review/142","commit":"cccccccccccccccccccccccccccccccccccccccc"},"v":1,"taskId":2,"at":1000}
+{"type":"session.requested","request":6,"role":"tester","v":1,"taskId":2,"at":1000}
+{"type":"session.started","session":"session-tester","v":1,"taskId":2,"at":1000}
+{"type":"review.passed","commit":"cccccccccccccccccccccccccccccccccccccccc","evidence":"bun test: 212 pass","v":1,"taskId":2,"at":1000}
+{"type":"session.stopping","session":"session-tester","request":7,"saves":false,"removes":"/repo/.skelcrew/review/142","v":1,"taskId":2,"at":1000}
+{"type":"approval.requested","criticalFiles":[],"v":1,"taskId":2,"at":1000}
+{"type":"session.stopped","session":"session-tester","saved":"nothing_to_save","v":1,"taskId":2,"at":1000}
+{"type":"approval.denied","note":"Use the helper.","v":1,"taskId":2,"at":1000}
+{"type":"session.requested","request":8,"role":"builder","v":1,"taskId":2,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":2,"at":1000}
+{"type":"build.done","handover":{"kind":"summary","text":"Empty reports now export a header row.","branch":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]}},"v":1,"taskId":2,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":9,"saves":true,"removes":null,"v":1,"taskId":2,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"saved","v":1,"taskId":2,"at":1000}
+{"type":"main.requested","request":10,"v":1,"taskId":2,"at":1000}
+{"type":"main.merged","reviewed":{"head":"cccccccccccccccccccccccccccccccccccccccc","changedFiles":["src/export/csv.ts"]},"v":1,"taskId":2,"at":1000}
+{"type":"workspace.requested","request":11,"tester":true,"v":1,"taskId":2,"at":1000}
+{"type":"copy.created","copy":{"path":"/repo/.skelcrew/review/142","commit":"cccccccccccccccccccccccccccccccccccccccc"},"v":1,"taskId":2,"at":1000}
+{"type":"session.requested","request":12,"role":"tester","v":1,"taskId":2,"at":1000}
+{"type":"session.started","session":"session-tester","v":1,"taskId":2,"at":1000}
+{"type":"review.passed","commit":"cccccccccccccccccccccccccccccccccccccccc","evidence":"bun test: 212 pass","v":1,"taskId":2,"at":1000}
+{"type":"session.stopping","session":"session-tester","request":13,"saves":false,"removes":"/repo/.skelcrew/review/142","v":1,"taskId":2,"at":1000}
+{"type":"approval.requested","criticalFiles":[],"v":1,"taskId":2,"at":1000}
+{"type":"session.stopped","session":"session-tester","saved":"nothing_to_save","v":1,"taskId":2,"at":1000}
+{"type":"approval.given","commit":"cccccccccccccccccccccccccccccccccccccccc","v":1,"taskId":2,"at":1000}
+{"type":"output.requested","request":14,"v":1,"taskId":2,"at":1000}
+{"type":"task.held","hold":{"kind":"failed","step":"delivery","message":"branch is checked out"},"v":1,"taskId":2,"at":1000}
+{"type":"task.released","v":1,"taskId":2,"at":1000}
+{"type":"output.requested","request":15,"v":1,"taskId":2,"at":1000}
+{"type":"output.delivered","delivered":{"kind":"branch","commit":"cccccccccccccccccccccccccccccccccccccccc","ref":"skel/142-fix-empty-export"},"v":1,"taskId":2,"at":1000}
+{"type":"workspace.removed","path":"/repo/.skelcrew/worktrees/142-fix-empty-export","v":1,"taskId":2,"at":1000}
+{"type":"task.received","title":"Fix button color","description":null,"source":{"kind":"local"},"plan":{"intent":"answer","rigor":"light","approve":false,"brief":"Fix button color","specPath":null},"v":1,"taskId":3,"at":1000}
+{"type":"workspace.requested","request":1,"tester":false,"v":1,"taskId":3,"at":1000}
+{"type":"workspace.created","workspace":{"path":"/repo/.skelcrew/worktrees/142-fix-empty-export","branch":"skel/142-fix-empty-export"},"v":1,"taskId":3,"at":1000}
+{"type":"session.requested","request":2,"role":"builder","v":1,"taskId":3,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":3,"at":1000}
+{"type":"build.done","handover":{"kind":"report","text":"Use a queue.","proposals":[{"title":"Add a queue","description":""}],"branch":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]}},"v":1,"taskId":3,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":3,"saves":false,"removes":null,"v":1,"taskId":3,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"nothing_to_save","v":1,"taskId":3,"at":1000}
+{"type":"review.ready","reviewed":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","changedFiles":["src/export/csv.ts"]},"v":1,"taskId":3,"at":1000}
+{"type":"workspace.requested","request":4,"tester":true,"v":1,"taskId":3,"at":1000}
+{"type":"copy.created","copy":{"path":"/repo/.skelcrew/review/142","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"v":1,"taskId":3,"at":1000}
+{"type":"session.requested","request":5,"role":"tester","v":1,"taskId":3,"at":1000}
+{"type":"session.started","session":"session-tester","v":1,"taskId":3,"at":1000}
+{"type":"review.passed","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidence":"bun test: 212 pass","v":1,"taskId":3,"at":1000}
+{"type":"session.stopping","session":"session-tester","request":6,"saves":false,"removes":"/repo/.skelcrew/review/142","v":1,"taskId":3,"at":1000}
+{"type":"output.requested","request":7,"v":1,"taskId":3,"at":1000}
+{"type":"session.stopped","session":"session-tester","saved":"nothing_to_save","v":1,"taskId":3,"at":1000}
+{"type":"output.delivered","delivered":{"kind":"report","path":"docs/answers/142.md","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"v":1,"taskId":3,"at":1000}
+{"type":"workspace.removed","path":"/repo/.skelcrew/worktrees/142-fix-empty-export","v":1,"taskId":3,"at":1000}
+{"type":"proposals.decided","approved":[0],"denied":[],"v":1,"taskId":3,"at":1000}
+{"type":"task.received","title":"Fix empty export","description":null,"source":{"kind":"local"},"plan":null,"v":1,"taskId":4,"at":1000}
+{"type":"workspace.requested","request":1,"tester":false,"v":1,"taskId":4,"at":1000}
+{"type":"task.held","hold":{"kind":"failed","step":"workspace","message":"disk full"},"v":1,"taskId":4,"at":1000}
+{"type":"task.released","v":1,"taskId":4,"at":1000}
+{"type":"workspace.requested","request":2,"tester":false,"v":1,"taskId":4,"at":1000}
+{"type":"workspace.created","workspace":{"path":"/repo/.skelcrew/worktrees/142-fix-empty-export","branch":"skel/142-fix-empty-export"},"v":1,"taskId":4,"at":1000}
+{"type":"session.requested","request":3,"role":"planner","v":1,"taskId":4,"at":1000}
+{"type":"task.held","hold":{"kind":"failed","step":"session","message":"claude not found"},"v":1,"taskId":4,"at":1000}
+{"type":"task.released","v":1,"taskId":4,"at":1000}
+{"type":"session.requested","request":4,"role":"planner","v":1,"taskId":4,"at":1000}
+{"type":"session.started","session":"session-planner","v":1,"taskId":4,"at":1000}
+{"type":"task.set","intent":"try","rigor":"light","approve":null,"v":1,"taskId":4,"at":1000}
+{"type":"session.stopping","session":"session-planner","request":5,"saves":false,"removes":null,"v":1,"taskId":4,"at":1000}
+{"type":"build.restarted","plan":{"intent":"try","rigor":"light","approve":false,"brief":"Fix empty export","specPath":null},"waitForStop":true,"v":1,"taskId":4,"at":1000}
+{"type":"session.stopped","session":"session-planner","saved":"nothing_to_save","v":1,"taskId":4,"at":1000}
+{"type":"session.requested","request":6,"role":"builder","v":1,"taskId":4,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":4,"at":1000}
+{"type":"task.held","hold":{"kind":"paused"},"v":1,"taskId":4,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":7,"saves":true,"removes":null,"v":1,"taskId":4,"at":1000}
+{"type":"session.stopped","session":"session-builder","saved":"saved","v":1,"taskId":4,"at":1000}
+{"type":"task.released","v":1,"taskId":4,"at":1000}
+{"type":"session.requested","request":8,"role":"builder","v":1,"taskId":4,"at":1000}
+{"type":"task.held","hold":{"kind":"crashed","exitCode":137,"lastLine":"Killed"},"v":1,"taskId":4,"at":1000}
+{"type":"task.released","v":1,"taskId":4,"at":1000}
+{"type":"session.requested","request":9,"role":"builder","v":1,"taskId":4,"at":1000}
+{"type":"session.started","session":"session-builder","v":1,"taskId":4,"at":1000}
+{"type":"task.killed","v":1,"taskId":4,"at":1000}
+{"type":"session.stopping","session":"session-builder","request":10,"saves":true,"removes":"/repo/.skelcrew/worktrees/142-fix-empty-export","v":1,"taskId":4,"at":1000}
+{"type":"task.received","title":"Fix empty export","description":null,"source":{"kind":"local"},"plan":null,"v":1,"taskId":5,"at":1000}
+{"type":"task.started_now","v":1,"taskId":5,"at":1000}
+{"type":"workspace.requested","request":1,"tester":false,"v":1,"taskId":5,"at":1000}
+{"type":"workspace.created","workspace":{"path":"/repo/.skelcrew/worktrees/142-fix-empty-export","branch":"skel/142-fix-empty-export"},"v":1,"taskId":5,"at":1000}
+{"type":"session.requested","request":2,"role":"planner","v":1,"taskId":5,"at":1000}
+{"type":"session.started","session":"session-planner","v":1,"taskId":5,"at":1000}
+{"type":"task.triaged","outcome":"split","proposals":[{"title":"Part one","description":""}],"v":1,"taskId":5,"at":1000}
+{"type":"session.stopping","session":"session-planner","request":3,"saves":false,"removes":"/repo/.skelcrew/worktrees/142-fix-empty-export","v":1,"taskId":5,"at":1000}
+{"type":"session.stopped","session":"session-planner","saved":"nothing_to_save","v":1,"taskId":5,"at":1000}

@@ -15,7 +15,7 @@ split into tasks here.
 
 - [x] **Event store.** The event log in SQLite. Every event checked by Zod when written and
       when read back, and a damaged row reported with its position.
-- [ ] **Saved-events fixture.** Real events in today's shape that must always read back, with
+- [x] **Saved-events fixture.** Real events in today's shape that must always read back, with
       the rule in `AGENTS.md` for when it may be regenerated.
 - [ ] **Outbox.** Commands saved with the events that caused them, in one transaction, and
       marked done when their tool finishes.

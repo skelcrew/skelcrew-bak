@@ -115,9 +115,10 @@ read, rewrite it.
   flows through them, and where to start.
 - `src/core/`: the core. Critical code, see above.
 - `src/checks/run-tests.ts`: the test watchdog.
+- `src/store/fixtures/v1-events.jsonl`: saved events that must always read back, see Saved
+  events below.
 - `CLAUDE.md` links to this file, so every agent reads the same rules.
 
-The saved events fixture joins this list when the store exists, see Saved events below.
 
 **Keep `docs/ARCHITECTURE.md` short.** It is an overview, not a catalogue. It names the main
 parts and how they fit, never single files, functions or features, so most changes leave it
