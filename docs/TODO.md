@@ -13,7 +13,7 @@ split into tasks here.
 
 ## Milestone 2: store and loop
 
-- [ ] **Event store.** The event log in SQLite. Every event checked by Zod when written and
+- [x] **Event store.** The event log in SQLite. Every event checked by Zod when written and
       when read back, and a damaged row reported with its position.
 - [ ] **Saved-events fixture.** Real events in today's shape that must always read back, with
       the rule in `AGENTS.md` for when it may be regenerated.
