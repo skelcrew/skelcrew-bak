@@ -10,6 +10,8 @@ import type {
   Config,
   Decision,
   Input,
+  Intent,
+  Rigor,
   Task,
   TaskEvent,
   TesterCopy,
@@ -134,3 +136,48 @@ export const ask = (session: SessionId, text = "Include archived rows?"): Input 
 export const reply = (text = "No"): Input => ({ by: "you", type: "reply", text });
 
 export const deliverAnswer: Input = { by: "daemon", type: "deliver_answer" };
+
+export type Saved = "saved" | "nothing_to_save" | "save_failed";
+
+export const stopped = (
+  request: number,
+  session: SessionId,
+  saved: Saved = "nothing_to_save",
+): Input => ({ by: "plugin", type: "stopped", request, session, saved, message: "" });
+
+export const proceed = (
+  spec: string | null = null,
+  plan: { intent: Intent; rigor: Rigor; approve: boolean } = {
+    intent: "ship",
+    rigor: "full",
+    approve: false,
+  },
+): Input => ({
+  by: "agent",
+  session: planner,
+  type: "triage_proceed",
+  plan: { ...plan, brief: "Empty reports crash. Look in the CSV writer." },
+  spec,
+});
+
+export const specCommitted = (request: number, path = "docs/plans/142-fix.md"): Input => ({
+  by: "plugin",
+  type: "spec_committed",
+  request,
+  path,
+});
+
+// A task whose builder is running, as request 4, after a planner proceeded.
+export function buildRunning(
+  plan: { intent: Intent; rigor: Rigor; approve: boolean } = {
+    intent: "ship",
+    rigor: "full",
+    approve: false,
+  },
+): Run {
+  return play(triageRunning().task, [
+    proceed(null, plan),
+    stopped(3, planner),
+    sessionStarted(4, builder),
+  ]);
+}

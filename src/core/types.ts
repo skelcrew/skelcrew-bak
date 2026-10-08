@@ -110,7 +110,7 @@ export type TriageStep =
   | { kind: "running"; session: SessionId }
   // The planner proceeded with a spec, and Skelcrew is committing it to the
   // branch. The planner can't, since it has no edit permission.
-  | { kind: "committing_spec"; request: number; plan: Plan };
+  | { kind: "committing_spec"; request: number; plan: Plan; text: string };
 
 export type BuildStep =
   | { kind: "queued" }
@@ -175,7 +175,8 @@ export type PhaseState =
       phase: "ended";
       outcome: Outcome;
       proposals: Proposal[];
-      // A workspace whose work couldn't be saved is never removed.
+      // The workspace until its removal is confirmed. One whose work couldn't
+      // be saved is never removed, and stays here.
       kept: Workspace | null;
     };
 
@@ -356,7 +357,13 @@ export type EventBody =
       // writes the brief here, so evolve only applies it.
       plan: Plan | null;
     }
-  | { type: "task.triaged"; outcome: "proceed"; plan: Plan }
+  // With a spec, Skelcrew commits it to the branch as `request`.
+  | {
+      type: "task.triaged";
+      outcome: "proceed";
+      plan: Plan;
+      spec: { text: string; request: number } | null;
+    }
   | {
       type: "task.triaged";
       outcome: "split";
@@ -379,7 +386,11 @@ export type EventBody =
       lastLine: string;
     }
   | { type: "session.stopping"; session: SessionId; request: number }
-  | { type: "session.stopped"; session: SessionId; saved: "saved" | "nothing_to_save" }
+  | {
+      type: "session.stopped";
+      session: SessionId;
+      saved: "saved" | "nothing_to_save" | "save_failed";
+    }
   | { type: "question.asked"; question: Question }
   | { type: "answer.kept"; text: string }
   | { type: "question.answered"; text: string }
@@ -433,7 +444,17 @@ export type Command =
       edits: boolean; // never true on an `answer` task
       context: SessionContext;
     }
-  | { type: "stop_session"; taskId: TaskId; request: number; session: SessionId; save: boolean }
+  // The daemon stops the session, then commits any uncommitted work when
+  // `save` is set. Then it removes `remove`, unless the save failed, so work
+  // is never thrown away.
+  | {
+      type: "stop_session";
+      taskId: TaskId;
+      request: number;
+      session: SessionId;
+      save: boolean;
+      remove: { path: string; deleteBranch: boolean } | null;
+    }
   // Sent at most once: recorded before it is typed, never repeated.
   | { type: "type_into_session"; session: SessionId; text: string }
   | {
