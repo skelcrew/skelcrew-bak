@@ -178,6 +178,16 @@ describe("the daemon", () => {
     );
   });
 
+  // So an outdated skel hears what to do, not that the answer was another's.
+  test("refuses a request from another version under that request's id", async () => {
+    const daemon = await started(folder());
+    const line = JSON.stringify({ v: 2, id: "7", token: null, call: { type: "ls" } });
+
+    const answer = JSON.parse(await rawLine(daemon.socket, `${line}\n`));
+    expect(answer.id).toBe("7");
+    expect(answer.message).toStartWith("The daemon speaks protocol 1");
+  });
+
   test("answers a line it can't read with a refusal, and stays up", async () => {
     const daemon = await started(folder());
 

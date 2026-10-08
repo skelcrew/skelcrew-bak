@@ -1,6 +1,7 @@
 // What the daemon does with one request: turns it into an input for the loop,
 // or reads the tasks for `skel ls`, and says what came of it.
 
+import * as z from "zod";
 import { TaskId } from "../core/ids";
 import type { AgentInput, BranchFacts, Hold, Task, YourInput } from "../core/types";
 import type { Loop } from "../loop/loop";
@@ -26,13 +27,24 @@ export type Context = { loop: Loop; tokens: Tokens; branchOf: (task: Task) => Br
 // daemon carries on.
 export function answerLine(context: Context, line: string): string {
   const parsed = parseRequest(line);
-  if (!parsed.ok) return refusal(parsed.message);
+  if (!parsed.ok) return refusal(parsed.message, idOf(line));
   const { id, token, call } = parsed.value;
   const handled = guarded(() => handle(context, call, token));
   const answer: Answer = handled.ok
     ? { v: VERSION, id, ok: true, result: handled.result }
     : { v: VERSION, id, ok: false, message: handled.message };
   return `${JSON.stringify(answer)}\n`;
+}
+
+// The id a request that can't be read still carries, so its refusal reaches
+// the caller as the answer to it. "unknown" when there is none.
+function idOf(line: string): string {
+  try {
+    const id = z.object({ id: z.string().min(1) }).safeParse(JSON.parse(line));
+    return id.success ? id.data.id : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 // A failure inside one request, such as git failing, is refused with why and

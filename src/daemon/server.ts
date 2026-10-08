@@ -54,7 +54,7 @@ export function listen(socket: string, answer: (line: string) => string): Promis
   });
 }
 
-// An answer for a line too broken to read an id from.
-export function refusal(message: string): string {
-  return encode({ v: VERSION, id: "unknown", ok: false, message });
+// A refusal of a request that can't be read, under its id if it has one.
+export function refusal(message: string, id = "unknown"): string {
+  return encode({ v: VERSION, id, ok: false, message });
 }
