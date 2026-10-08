@@ -10,6 +10,7 @@ import type { TaskIn } from "./task";
 import type {
   Evolve,
   Evolved,
+  Feedback,
   Hold,
   Outcome,
   Plan,
@@ -54,18 +55,27 @@ export const evolve: Evolve = (task, event) => {
     case "session.stopping":
       return ok({
         ...task,
-        stopping: { session: event.session, request: event.request },
+        stopping: { session: event.session, request: event.request, removes: event.removes },
         requests: Math.max(task.requests, event.request),
       });
 
-    // An ended task's workspace was removed with the stop, unless the save
-    // failed. Then it stays, so no work is thrown away.
-    case "session.stopped":
-      if (task.stopping === null) return refuse(event, `#${task.id} isn't stopping an agent`);
-      if (task.phase === "ended" && event.saved !== "save_failed") {
+    // An ended task's workspace goes with the stop that removes it, unless
+    // the save failed. Then it stays, so no work is thrown away.
+    case "session.stopped": {
+      const { stopping } = task;
+      if (stopping === null) return refuse(event, `#${task.id} isn't stopping an agent`);
+      const removed = event.saved !== "save_failed" ? stopping.removes : null;
+      if (task.phase === "ended" && removed !== null && task.kept?.path === removed) {
         return ok({ ...task, stopping: null, kept: null });
       }
       return ok({ ...task, stopping: null });
+    }
+
+    case "workspace.removed":
+      if (task.phase !== "ended" || task.kept?.path !== event.path) {
+        return refuse(event, `#${task.id} doesn't hold ${event.path}`);
+      }
+      return ok({ ...task, kept: null });
   }
 
   switch (task.phase) {
@@ -209,8 +219,11 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
     case "main.requested":
       return ok(withRequest(task, event.request, { kind: "merging_main", request: event.request }));
 
+    // A `try` finishes in build, so it only keeps the merged commit. Every
+    // other intent moves on to review with it.
     case "main.merged":
     case "review.ready": {
+      if (task.plan.intent === "try") return ok({ ...task, reviewed: event.reviewed });
       const reviewing = toReview(task, event.reviewed);
       if (reviewing === null) return refuse(event, `#${task.id} has no handed-over work`);
       return ok(reviewing);
@@ -226,7 +239,7 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
         handover: null,
       });
   }
-  return refuse(event, `#${task.id} is in build`);
+  return finishing(task, event) ?? refuse(event, `#${task.id} is in build`);
 }
 
 function inReview(task: TaskIn<"review">, event: TaskEvent): Evolved {
@@ -235,8 +248,62 @@ function inReview(task: TaskIn<"review">, event: TaskEvent): Evolved {
       return ok(
         withRequest(task, event.request, { kind: "creating_copy", request: event.request }),
       );
+
+    case "copy.created":
+      return ok({ ...task, copy: event.copy });
+
+    case "session.requested":
+      return ok(withRequest(task, event.request, { kind: "starting", request: event.request }));
+
+    case "session.started":
+      if (task.step.kind !== "starting") {
+        return refuse(event, `#${task.id} isn't starting a session`);
+      }
+      return ok({ ...task, step: { kind: "running", session: event.session } });
+
+    // The copy goes with the tester's stop, so it is no longer the task's.
+    case "review.passed":
+      return ok({ ...task, evidence: event.evidence, copy: null });
+
+    // Back to build, for a fresh builder once the tester's stop is confirmed.
+    case "review.changes_requested":
+      return ok(
+        backToBuild(task, { kind: "awaiting_stop" }, { kind: "findings", text: event.findings }, 1),
+      );
   }
-  return refuse(event, `#${task.id} is in review`);
+  return finishing(task, event) ?? refuse(event, `#${task.id} is in review`);
+}
+
+// Approval and delivery, the same in whichever phase ran last. Null for any
+// other event.
+function finishing(task: TaskIn<"build" | "review">, event: TaskEvent): Evolved | null {
+  switch (event.type) {
+    case "approval.requested":
+      return ok({ ...task, step: { kind: "awaiting_approval" } });
+
+    case "output.requested":
+      return ok({
+        ...task,
+        step: { kind: "delivering", request: event.request },
+        requests: Math.max(task.requests, event.request),
+      });
+
+    // A fact for the record. output.requested, in the same decision, moves on.
+    case "approval.given":
+      return ok(task);
+
+    case "approval.denied":
+      return ok(backToBuild(task, { kind: "queued" }, { kind: "denied", note: event.note }, 0));
+
+    case "output.delivered": {
+      const proposals: Proposal[] =
+        task.handover?.kind === "report"
+          ? task.handover.proposals.map((proposal) => ({ ...proposal, decision: "pending" }))
+          : [];
+      return ok(toEnded(task, { kind: "done", delivered: event.delivered }, proposals));
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,9 +366,35 @@ function toReview(task: TaskIn<"build">, reviewed: Reviewed): Task | null {
   };
 }
 
+// Back to build for a fresh builder, with why it is back. What was handed
+// over is replaced by what the next builder hands over. `loops` counts a
+// round trip through review.
+function backToBuild(
+  task: TaskIn<"build" | "review">,
+  step: { kind: "queued" } | { kind: "awaiting_stop" },
+  feedback: Feedback,
+  loops: number,
+): Task {
+  return {
+    ...base(task),
+    phase: "build",
+    plan: task.plan,
+    workspace: task.workspace,
+    step,
+    loops: task.loops + loops,
+    feedback,
+    handover: null,
+    reviewed: null,
+  };
+}
+
 // The task ends. Its question and attachment go with it. The workspace is
 // tracked until its removal is confirmed.
-function toEnded(task: TaskIn<"triage">, outcome: Outcome, proposals: Proposal[]): Task {
+function toEnded(
+  task: Exclude<Task, { phase: "ended" }>,
+  outcome: Outcome,
+  proposals: Proposal[],
+): Task {
   return {
     ...base(task),
     question: null,

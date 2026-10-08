@@ -6,6 +6,7 @@
 // rules apply. The steps follow it, then one function per phase, then the
 // helpers that make workspaces and start and stop agents.
 
+import picomatch from "picomatch";
 import { runningSession, type TaskIn, waitingForSession } from "./task";
 import type {
   Command,
@@ -15,6 +16,7 @@ import type {
   Envelope,
   EventBody,
   Feedback,
+  Handover,
   Hold,
   Input,
   Plan,
@@ -51,10 +53,10 @@ export const decide: Decide = (task, envelope, config) => {
       return inTriage(task, input, ctx);
     case "build":
       return inBuild(task, input, ctx);
+    case "review":
+      return inReview(task, input, ctx);
     case "ended":
       return ctx.reject(`#${task.id} has ended.`);
-    default:
-      return ctx.reject(`Skelcrew can't take ${input.type} yet.`);
   }
 };
 
@@ -223,8 +225,11 @@ function afterStop(task: Task): Effects {
   if (task.workspace === null) return none;
   const { handover } = task;
 
-  // The planner stopped, or a builder was let go: a fresh builder starts.
-  if (handover === null) return startBuilder(task, task.workspace, task.plan, null, next(task));
+  // The planner or tester stopped, or a builder was let go: a fresh builder
+  // starts, told why it is back.
+  if (handover === null) {
+    return startBuilder(task, task.workspace, task.plan, task.feedback, next(task));
+  }
 
   // An `answer` merges nothing, so its handed-over commit is reviewed as is.
   if (task.plan.intent === "answer") {
@@ -428,6 +433,22 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
       if (!waitingForMerge(task, input.request)) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
+      // A `try` skips review, so it finishes now.
+      if (task.plan.intent === "try" && task.handover !== null) {
+        const finish = finishing(
+          task,
+          task.plan,
+          input.reviewed,
+          task.handover,
+          null,
+          next(task),
+          ctx.config,
+        );
+        return ctx.accept(
+          [{ type: "main.merged", reviewed: input.reviewed }, ...finish.events],
+          finish.commands,
+        );
+      }
       const copy = startCopy(task, input.reviewed, next(task));
       return ctx.accept(
         [{ type: "main.merged", reviewed: input.reviewed }, ...copy.events],
@@ -459,7 +480,191 @@ function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
       return ctx.accept([held({ kind: "failed", step: "merge_main", message: input.message })]);
 
     default:
-      return ctx.reject(`#${task.id} is in build, so it can't take ${input.type}.`);
+      return finish(task, input, ctx, task.handover, null) ?? wrongPhase(task, input, ctx);
+  }
+}
+
+function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision {
+  switch (input.type) {
+    // The tester starts in its own copy of the reviewed commit, read only,
+    // told what the builder handed over.
+    case "copy_created": {
+      if (!waitingForWorkspace(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      const request = next(task);
+      return ctx.accept(
+        [
+          { type: "copy.created", copy: input.copy },
+          { type: "session.requested", request, role: "tester" },
+        ],
+        [
+          {
+            type: "start_session",
+            taskId: task.id,
+            request,
+            role: "tester",
+            cwd: input.copy.path,
+            edits: false,
+            context: { ...sessionContext(task, task.plan, null), handover: task.handover },
+          },
+        ],
+      );
+    }
+
+    // The tester is stopped and its copy removed. The verdict names the
+    // commit it covers, which is the one that is delivered.
+    case "pass": {
+      if (task.question !== null) {
+        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
+      }
+      const stop = stopTester(task, input.session, next(task));
+      const passed: EventBody = {
+        type: "review.passed",
+        commit: task.reviewed.head,
+        evidence: input.evidence,
+      };
+      const finish = finishing(
+        task,
+        task.plan,
+        task.reviewed,
+        task.handover,
+        input.evidence,
+        next(task) + 1,
+        ctx.config,
+      );
+      return ctx.accept(
+        [passed, ...stop.events, ...finish.events],
+        [...stop.commands, ...finish.commands],
+      );
+    }
+
+    // Back to build: a fresh builder starts with the findings once the
+    // tester's stop is confirmed. That is a loop, and at the cap the task
+    // waits for you.
+    case "changes": {
+      if (task.question !== null) {
+        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
+      }
+      const stop = stopTester(task, input.session, next(task));
+      const asked: EventBody = { type: "review.changes_requested", findings: input.findings };
+      if (task.loops + 1 >= ctx.config.loopCap) {
+        return ctx.accept(
+          [asked, ...stop.events, held({ kind: "loop_cap", findings: input.findings })],
+          stop.commands,
+        );
+      }
+      return ctx.accept([asked, ...stop.events], stop.commands);
+    }
+
+    default:
+      return finish(task, input, ctx, task.handover, task.evidence) ?? wrongPhase(task, input, ctx);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Approval and delivery
+// ---------------------------------------------------------------------------
+//
+// The last steps of whichever phase ran last: review, or build for a `try`.
+
+// After review passes, or a `try` merges: your sign-off first when the task
+// is flagged or touches a critical path, otherwise delivery.
+function finishing(
+  task: Task,
+  plan: Plan,
+  reviewed: Reviewed,
+  handover: Handover,
+  evidence: string | null,
+  request: number,
+  config: Config,
+): Effects {
+  const critical = criticalFiles(reviewed.changedFiles, config.critical);
+  if (plan.approve || critical.length > 0) {
+    return { events: [{ type: "approval.requested", criticalFiles: critical }], commands: [] };
+  }
+  return deliver(task, plan, reviewed, handover, evidence, request);
+}
+
+// Hands over exactly the reviewed commit, or the report for an `answer`.
+function deliver(
+  task: Task,
+  plan: Plan,
+  reviewed: Reviewed,
+  handover: Handover,
+  evidence: string | null,
+  request: number,
+): Effects {
+  return {
+    events: [{ type: "output.requested", request }],
+    commands: [
+      {
+        type: "deliver",
+        taskId: task.id,
+        request,
+        intent: plan.intent,
+        reviewed,
+        handover,
+        evidence,
+      },
+    ],
+  };
+}
+
+// Your sign-off, and delivery's replies, in either phase that can finish.
+// Null for any other input.
+function finish(
+  task: TaskIn<"build" | "review">,
+  input: Input,
+  ctx: Context,
+  handover: Handover | null,
+  evidence: string | null,
+): Decision | null {
+  const { step, reviewed } = task;
+  switch (input.type) {
+    case "approve": {
+      if (step.kind !== "awaiting_approval" || reviewed === null || handover === null) {
+        return ctx.reject(`#${task.id} isn't waiting for your sign-off.`);
+      }
+      const out = deliver(task, task.plan, reviewed, handover, evidence, next(task));
+      return ctx.accept(
+        [{ type: "approval.given", commit: reviewed.head }, ...out.events],
+        out.commands,
+      );
+    }
+
+    // Back to build with your note, for a fresh builder when a slot is free.
+    // Not a failure, so it isn't a loop.
+    case "deny":
+      if (step.kind !== "awaiting_approval") {
+        return ctx.reject(`#${task.id} isn't waiting for your sign-off.`);
+      }
+      if (isBlank(input.note)) return ctx.reject("A denial needs a note.");
+      return ctx.accept([{ type: "approval.denied", note: input.note }]);
+
+    // Delivered: the task is done, and its workspace is removed. The branch
+    // stays, since it holds the work.
+    case "delivered": {
+      if (step.kind !== "delivering" || step.request !== input.request) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      const events: EventBody[] = [{ type: "output.delivered", delivered: input.delivered }];
+      const commands: Command[] = [];
+      if (task.workspace !== null) {
+        events.push({ type: "workspace.removed", path: task.workspace.path });
+        commands.push({ type: "remove_workspace", path: task.workspace.path, deleteBranch: false });
+      }
+      return ctx.accept(events, commands);
+    }
+
+    case "delivery_failed":
+      if (step.kind !== "delivering" || step.request !== input.request) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([held({ kind: "failed", step: "delivery", message: input.message })]);
+
+    default:
+      return null;
   }
 }
 
@@ -510,6 +715,12 @@ function startBuilder(
   };
 }
 
+// Stops the tester and removes its copy. It never edits, so nothing is saved.
+function stopTester(task: TaskIn<"review">, session: SessionId, request: number): Effects {
+  const remove = task.copy === null ? null : { path: task.copy.path, deleteBranch: false };
+  return stopAgent(task, session, request, false, remove);
+}
+
 // Stops an agent the task lets go. With `save`, its uncommitted work is
 // committed after it stops. `remove` is a workspace to remove after that,
 // unless the save failed. The task keeps its slot until the stop is confirmed.
@@ -521,14 +732,21 @@ function stopAgent(
   remove: { path: string; deleteBranch: boolean } | null,
 ): Effects {
   return {
-    events: [{ type: "session.stopping", session, request }],
+    events: [{ type: "session.stopping", session, request, removes: remove?.path ?? null }],
     commands: [{ type: "stop_session", taskId: task.id, request, session, save, remove }],
   };
 }
 
 // What a new session is told, on top of its role's preamble.
 function sessionContext(task: Task, plan: Plan | null, feedback: Feedback | null): SessionContext {
-  return { title: task.title, description: task.description, plan, feedback, answer: null };
+  return {
+    title: task.title,
+    description: task.description,
+    plan,
+    feedback,
+    handover: null,
+    answer: null,
+  };
 }
 
 // A report from an agent that isn't the task's current one: the reason, or
@@ -545,6 +763,18 @@ function senderMismatch(task: Task, input: Input): string | null {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+// The changed files that match a critical path, so your sign-off says why it
+// is needed. `dot` makes ** match hidden files too, such as src/auth/.env, and
+// `windows: false` fixes the separator, so every machine gives one answer.
+function criticalFiles(files: string[], critical: string[]): string[] {
+  const matchers = critical.map((glob) => picomatch(glob, { dot: true, windows: false }));
+  return files.filter((file) => matchers.some((matches) => matches(file)));
+}
+
+function wrongPhase(task: Task, input: Input, ctx: Context): Decision {
+  return ctx.reject(`#${task.id} is in ${task.phase}, so it can't take ${input.type}.`);
+}
 
 function held(hold: Hold): EventBody {
   return { type: "task.held", hold };

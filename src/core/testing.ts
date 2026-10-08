@@ -233,3 +233,63 @@ export const addPlanned = (
   description: null,
   plan: { intent, rigor, approve },
 });
+
+export const copyCreated = (request: number): Input => ({
+  by: "plugin",
+  type: "copy_created",
+  request,
+  copy,
+});
+
+export const pass = (evidence = "bun test: 212 pass"): Input => ({
+  by: "agent",
+  session: tester,
+  type: "pass",
+  evidence,
+});
+
+export const changes = (findings = "The header row is missing its last column."): Input => ({
+  by: "agent",
+  session: tester,
+  type: "changes",
+  findings,
+});
+
+export const approve: Input = { by: "you", type: "approve" };
+export const deny = (note = "Use the existing CSV helper."): Input => ({
+  by: "you",
+  type: "deny",
+  note,
+});
+
+export const delivered = (request: number, commit = reviewed.head): Input => ({
+  by: "plugin",
+  type: "delivered",
+  request,
+  delivered: { kind: "branch", commit, ref: "skel/142-fix-empty-export" },
+});
+
+export const deliveryFailed = (request: number, message = "branch is checked out"): Input => ({
+  by: "plugin",
+  type: "delivery_failed",
+  request,
+  message,
+});
+
+// A task whose tester is running, as request 8, on the reviewed commit.
+export function reviewRunning(
+  plan: { intent: Intent; rigor: Rigor; approve: boolean } = {
+    intent: "ship",
+    rigor: "full",
+    approve: false,
+  },
+  facts = reviewed,
+): Run {
+  return play(buildRunning(plan).task, [
+    done(),
+    stopped(5, builder, "saved"),
+    mainMerged(6, facts),
+    copyCreated(7),
+    sessionStarted(8, tester),
+  ]);
+}

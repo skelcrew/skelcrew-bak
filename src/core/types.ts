@@ -230,7 +230,8 @@ export type TaskBase = {
   lane: "resumed" | "queued";
   // An agent being stopped. The task keeps its slot until the stop is
   // confirmed, and nothing new starts on the task before then.
-  stopping: { session: SessionId; request: number } | null;
+  // `removes` is the path its stop removes once the work is safe, if any.
+  stopping: { session: SessionId; request: number; removes: string | null } | null;
   // How many requests the task has sent that expect a reply. An event that
   // sends one carries its number, and evolve records it from there.
   requests: number;
@@ -388,7 +389,7 @@ export type EventBody =
       exitCode: number | null;
       lastLine: string;
     }
-  | { type: "session.stopping"; session: SessionId; request: number }
+  | { type: "session.stopping"; session: SessionId; request: number; removes: string | null }
   | {
       type: "session.stopped";
       session: SessionId;
@@ -485,6 +486,7 @@ export type SessionContext = {
   description: string | null;
   plan: Plan | null; // null for the planner
   feedback: Feedback | null;
+  handover: Handover | null; // what the tester reviews
   answer: string | null; // your answer, when the session is new
 };
 

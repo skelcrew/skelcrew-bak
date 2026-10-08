@@ -44,6 +44,7 @@ describe("the workspace arriving in triage", () => {
           description: "Crashes on reports with no rows.",
           plan: null,
           feedback: null,
+          handover: null,
           answer: null,
         },
       },
@@ -120,7 +121,7 @@ describe("the planner proceeding", () => {
     expect(task.phase).toBe("build");
     if (task.phase !== "build") return;
     expect(task.step).toEqual({ kind: "awaiting_stop" });
-    expect(task.stopping).toEqual({ session: planner, request: 3 });
+    expect(task.stopping).toEqual({ session: planner, request: 3, removes: null });
     expect(task.workspace).toEqual(workspace);
     expect(task.plan).toEqual({
       intent: "ship",
@@ -154,6 +155,7 @@ describe("the planner proceeding", () => {
             specPath: null,
           },
           feedback: null,
+          handover: null,
           answer: null,
         },
       },
