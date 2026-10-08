@@ -88,6 +88,7 @@ flowchart TB
     W -- "skel commands" --> D
 ```
 
+- **The stack** is TypeScript on Bun, with Zod checking every outside input and Biome for lint and format. `AGENTS.md` has the code rules.
 - **The daemon** (`skel serve`) is the only part that holds state or credentials. Any `skel` command starts it if it isn't running.
 - **The scheduler** is where orchestration lives: plain code that decides which task gets a slot, which role starts where, and where questions go. There is no supervising agent. The planner comes closest, but it shapes one task once, up front, and hands back data.
 - **Clients** (CLI, TUI) talk to the daemon over a local socket and hold no state. Messages are versioned, so the same protocol can later be exposed over the network.

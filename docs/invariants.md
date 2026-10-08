@@ -1,6 +1,6 @@
 # Core invariants
 
-**Status: draft, for approval.** These are the rules the core must never break, whatever
+**Status: approved.** These are the rules the core must never break, whatever
 happens. You approve every change to this list. Property tests send thousands of random
 input sequences, and check every rule after every step. Each transition's tests are written
 against this list.
