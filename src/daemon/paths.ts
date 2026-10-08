@@ -2,8 +2,8 @@
 // both ask here, so they always agree on the socket.
 
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, type Stats } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, realpathSync, type Stats, statSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 
 export type DaemonPaths = {
   // The repository's real path. The daemon locks this folder.
@@ -81,4 +81,37 @@ export function ownSocketFolder(path: string): string | null {
   if (mine && found.isDirectory()) return null;
   if (mine) return `${path} isn't a folder, so skelcrew won't use it. Remove it, then try again.`;
   return `${path} belongs to another user, so skelcrew won't use it. An administrator must remove it.`;
+}
+
+// The repository a `skel` command run in `here` belongs to, so every command
+// in it reaches the same daemon, from any folder. A task's worktree lives in
+// the repository's .skelcrew, so a path through a .skelcrew folder belongs to
+// the folder holding the first one, even though the worktree has a .git and a
+// .skelcrew of its own. Otherwise it is the nearest folder above with a
+// .skelcrew folder or skelcrew.yaml, then the nearest with a .git, then
+// `here` itself.
+export function findRepo(here: string): string {
+  const parts = resolve(here).split(sep);
+  const inside = parts.indexOf(".skelcrew");
+  if (inside > 0) return parts.slice(0, inside).join(sep) || sep;
+
+  const above = (has: (dir: string) => boolean): string | null => {
+    for (let dir = resolve(here); ; dir = dirname(dir)) {
+      if (has(dir)) return dir;
+      if (dirname(dir) === dir) return null;
+    }
+  };
+  return (
+    above((dir) => isFolder(join(dir, ".skelcrew")) || existsSync(join(dir, "skelcrew.yaml"))) ??
+    above((dir) => existsSync(join(dir, ".git"))) ??
+    resolve(here)
+  );
+}
+
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }

@@ -7,11 +7,12 @@ import { mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { sendStarting } from "../daemon/client";
 import { serve } from "../daemon/daemon";
-import { daemonPaths, ownSocketFolder } from "../daemon/paths";
+import { daemonPaths, findRepo, ownSocketFolder } from "../daemon/paths";
 import { run } from "./cli";
 
 const args = Bun.argv.slice(2);
-const repo = process.cwd();
+// The repository this command belongs to, from whichever folder in it.
+const repo = findRepo(process.cwd());
 
 if (args[0] === "serve") {
   const served = await serve(repo);

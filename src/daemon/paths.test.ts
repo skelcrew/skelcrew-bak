@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { daemonPaths, ownSocketFolder } from "./paths";
+import { daemonPaths, findRepo, ownSocketFolder } from "./paths";
 import { cleanUp, folder } from "./testing";
 
 afterEach(cleanUp);
@@ -100,5 +100,52 @@ describe("the shared socket folder", () => {
     expect(ownSocketFolder(path)).toBe(
       `${path} isn't a folder, so skelcrew won't use it. Remove it, then try again.`,
     );
+  });
+});
+
+describe("the repository a skel command belongs to", () => {
+  test("is the nearest folder above with a .skelcrew folder", () => {
+    const repo = folder();
+    mkdirSync(join(repo, ".skelcrew"));
+    mkdirSync(join(repo, "src", "deep"), { recursive: true });
+
+    expect(findRepo(join(repo, "src", "deep"))).toBe(repo);
+  });
+
+  // An agent runs skel from its worktree, which lives inside the repository's
+  // .skelcrew, and has a .git of its own.
+  test("is the main repository, from inside a task's worktree", () => {
+    const repo = folder();
+    const worktree = join(repo, ".skelcrew", "worktrees", "1-fix", "src");
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(repo, ".skelcrew", "worktrees", "1-fix", ".git"), "gitdir: ...\n");
+    // Where the agent writes the files it hands over.
+    mkdirSync(join(repo, ".skelcrew", "worktrees", "1-fix", ".skelcrew", "out"), {
+      recursive: true,
+    });
+
+    expect(findRepo(worktree)).toBe(repo);
+  });
+
+  test("is the nearest folder above with skelcrew.yaml", () => {
+    const repo = folder();
+    writeFileSync(join(repo, "skelcrew.yaml"), "");
+    mkdirSync(join(repo, "src"));
+
+    expect(findRepo(join(repo, "src"))).toBe(repo);
+  });
+
+  test("is the git repository's top, before Skelcrew has run there", () => {
+    const repo = folder();
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(join(repo, "src"));
+
+    expect(findRepo(join(repo, "src"))).toBe(repo);
+  });
+
+  test("is the folder itself, when nothing above says otherwise", () => {
+    const here = folder();
+
+    expect(findRepo(here)).toBe(here);
   });
 });
