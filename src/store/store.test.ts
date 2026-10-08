@@ -108,7 +108,7 @@ describe("the event store", () => {
 
     const loaded = EventStore.open(path).loadTasks();
     expect(loaded.ok).toBe(false);
-    expect(!loaded.ok && loaded.seq).toBe(3);
+    expect(!loaded.ok && loaded.row).toBe(3);
   });
 
   test("reports an event that doesn't fit the task, which a damaged log could hold", () => {
@@ -122,7 +122,7 @@ describe("the event store", () => {
     db.close();
 
     const loaded = EventStore.open(path).loadTasks();
-    expect(!loaded.ok && loaded.seq).toBe(2);
+    expect(!loaded.ok && loaded.row).toBe(2);
   });
 });
 
@@ -171,7 +171,7 @@ describe("the outbox", () => {
     db.close();
 
     const loaded = EventStore.open(path).loadCommands();
-    expect(!loaded.ok && loaded.seq).toBe(1);
+    expect(!loaded.ok && loaded.row).toBe(1);
   });
 });
 

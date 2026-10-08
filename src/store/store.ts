@@ -37,9 +37,9 @@ export type Queued = { ok: true; ids: number[] } | { ok: false; reason: string }
 
 export type SavedCommand = { id: number; command: Command };
 
-// What was read back, or the position of the first row that couldn't be
+// What was read back, or the id of the first row that couldn't be
 // read or didn't fit, so it can be found and looked at.
-export type Loaded<T> = ({ ok: true } & T) | { ok: false; seq: number; reason: string };
+export type Loaded<T> = ({ ok: true } & T) | { ok: false; row: number; reason: string };
 
 export class EventStore {
   private constructor(private readonly db: Database) {}
@@ -122,7 +122,7 @@ export class EventStore {
     const commands: SavedCommand[] = [];
     for (const row of rows) {
       const parsed = parseCommand(readJson(row.body));
-      if (!parsed.ok) return { ok: false, seq: row.id, reason: parsed.reason };
+      if (!parsed.ok) return { ok: false, row: row.id, reason: parsed.reason };
       commands.push({ id: row.id, command: parsed.value });
     }
     return { ok: true, commands };
@@ -137,10 +137,10 @@ export class EventStore {
     const tasks = new Map<TaskId, Task>();
     for (const row of rows) {
       const parsed = parseTaskEvent(readJson(row.body));
-      if (!parsed.ok) return { ok: false, seq: row.seq, reason: parsed.reason };
+      if (!parsed.ok) return { ok: false, row: row.seq, reason: parsed.reason };
       const event = parsed.value;
       const evolved = evolve(tasks.get(event.taskId) ?? null, event);
-      if (!evolved.ok) return { ok: false, seq: row.seq, reason: evolved.reason };
+      if (!evolved.ok) return { ok: false, row: row.seq, reason: evolved.reason };
       tasks.set(event.taskId, evolved.task);
     }
     return { ok: true, tasks };
@@ -157,7 +157,7 @@ export class EventStore {
     const events: TaskEvent[] = [];
     for (const row of rows) {
       const parsed = parseTaskEvent(readJson(row.body));
-      if (!parsed.ok) return { ok: false, seq: row.seq, reason: parsed.reason };
+      if (!parsed.ok) return { ok: false, row: row.seq, reason: parsed.reason };
       events.push(parsed.value);
     }
     return { ok: true, events };

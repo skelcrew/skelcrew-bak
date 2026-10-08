@@ -214,7 +214,7 @@ describe("reopening after a restart", () => {
     const damaged: ReadableLog = {
       append: () => ({ ok: true, ids: [] }),
       carriedOut: () => ({ ok: true }),
-      loadTasks: () => ({ ok: false, seq: 7, reason: "not JSON" }),
+      loadTasks: () => ({ ok: false, row: 7, reason: "not JSON" }),
       loadCommands: () => ({ ok: true, commands: [] }),
     };
     const opened = Loop.open(config, recording(), damaged);
@@ -227,7 +227,7 @@ describe("reopening after a restart", () => {
       append: () => ({ ok: true, ids: [] }),
       carriedOut: () => ({ ok: true }),
       loadTasks: () => ({ ok: true, tasks: new Map() }),
-      loadCommands: () => ({ ok: false, seq: 3, reason: "no type" }),
+      loadCommands: () => ({ ok: false, row: 3, reason: "no type" }),
     };
 
     expect(Loop.open(config, recording(), damaged)).toEqual({

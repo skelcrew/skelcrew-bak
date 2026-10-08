@@ -81,10 +81,10 @@ export class Loop {
     now: () => number = Date.now,
   ): { ok: true; loop: Loop } | { ok: false; reason: string } {
     const tasks = log.loadTasks();
-    if (!tasks.ok) return { ok: false, reason: `Event ${tasks.seq}: ${tasks.reason}` };
+    if (!tasks.ok) return { ok: false, reason: `Event ${tasks.row}: ${tasks.reason}` };
     const unfinished = log.loadCommands();
     if (!unfinished.ok) {
-      return { ok: false, reason: `Command ${unfinished.seq}: ${unfinished.reason}` };
+      return { ok: false, reason: `Command ${unfinished.row}: ${unfinished.reason}` };
     }
     const loop = new Loop(config, tools, log, { tasks: tasks.tasks, now });
     loop.dispatch(unfinished.commands.map(({ id, command }) => ({ command, id })));
