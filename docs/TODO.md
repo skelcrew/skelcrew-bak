@@ -51,7 +51,7 @@ for you. The first three are proven by a script that walks the core through them
 
 A draft, for review before any of it is built. In order, each one usable by the next.
 
-- [ ] **Config.** Read `skelcrew.yaml` and check it with Zod: roles, repo commands, critical
+- [x] **Config.** Read `skelcrew.yaml` and check it with Zod: roles, repo commands, critical
       paths and limits. A bad file is refused with what is wrong and where.
 - [ ] **Protocol.** The messages between `skel` and the daemon, versioned and checked with
       Zod on both sides: a request, and an answer of accepted or rejected with the reason.
