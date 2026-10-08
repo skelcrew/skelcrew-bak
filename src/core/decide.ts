@@ -5,7 +5,7 @@
 // `decide` below is the outline: each step is one line, in the order the
 // rules apply. The steps follow it.
 
-import type { TaskIn } from "./task";
+import { runningSession, type TaskIn, waitingForSession } from "./task";
 import type {
   Command,
   Decide,
@@ -30,6 +30,7 @@ export const decide: Decide = (task, envelope) => {
 
   if (input.type === "add") return create(task, input, ctx);
   if (task === null) return ctx.reject(`#${envelope.taskId} doesn't exist.`);
+  if (worksInAnyPhase(input)) return inAnyPhase(task, input, ctx);
 
   switch (task.phase) {
     case "triage":
@@ -72,6 +73,36 @@ function create(task: Task | null, input: Input & { type: "add" }, ctx: Context)
       plan,
     },
   ]);
+}
+
+// Inputs whose rules don't depend on the phase.
+const anyPhaseInputs = ["session_ended"] as const;
+type AnyPhaseInput = Extract<Input, { type: (typeof anyPhaseInputs)[number] }>;
+
+function worksInAnyPhase(input: Input): input is AnyPhaseInput {
+  return anyPhaseInputs.some((type) => type === input.type);
+}
+
+function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
+  switch (input.type) {
+    // A session that ends without reporting has crashed or quit, so the task
+    // is held with what it last printed. The report names the session, so an
+    // old session's end can't hold the task. It also names the request that
+    // started the session, so an end that arrives before the start reply
+    // still counts.
+    case "session_ended": {
+      const current = runningSession(task) === input.session;
+      if (!current && !waitingForSession(task, input.request)) {
+        return ctx.reject(`#${task.id}'s agent isn't ${input.session}.`);
+      }
+      return ctx.accept([
+        {
+          type: "task.held",
+          hold: { kind: "crashed", exitCode: input.exitCode, lastLine: input.lastLine },
+        },
+      ]);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +154,20 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
         { type: "task.held", hold: { kind: "failed", step: "workspace", message: input.message } },
       ]);
     }
+
+    case "session_started":
+      if (!waitingForSession(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([{ type: "session.started", session: input.session }]);
+
+    case "session_failed":
+      if (!waitingForSession(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([
+        { type: "task.held", hold: { kind: "failed", step: "session", message: input.message } },
+      ]);
 
     default:
       return ctx.reject(`Skelcrew can't take ${input.type} yet.`);

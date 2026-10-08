@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { SessionId } from "./ids";
 import {
   add,
   id,
+  next,
+  planner,
+  play,
   run,
+  sessionEnded,
+  sessionFailed,
   start,
+  triageRunning,
   types,
   workspace,
   workspaceCreated,
@@ -48,5 +55,44 @@ describe("the workspace arriving in triage", () => {
     expect(commands).toEqual([]);
     expect(task.hold).toEqual({ kind: "failed", step: "workspace", message: "disk full" });
     expect(task.phase === "triage" && task.step).toEqual({ kind: "queued" });
+  });
+});
+
+describe("the planner's session", () => {
+  test("starting puts the planner to work", () => {
+    const { task, events } = triageRunning();
+
+    expect(types(events)).toEqual(["session.started"]);
+    expect(task.phase === "triage" && task.step).toEqual({ kind: "running", session: planner });
+  });
+
+  test("failing to start holds the task", () => {
+    const { task, events } = run(add(), start, workspaceCreated(1), sessionFailed(2, "no claude"));
+
+    expect(types(events)).toEqual(["task.held"]);
+    expect(task.hold).toEqual({ kind: "failed", step: "session", message: "no claude" });
+    expect(task.phase === "triage" && task.step).toEqual({ kind: "queued" });
+  });
+
+  test("ending without reporting holds the task, with its exit code and last line", () => {
+    const { task } = play(triageRunning().task, [sessionEnded(2, planner, 1, "Killed")]);
+
+    expect(task.hold).toEqual({ kind: "crashed", exitCode: 1, lastLine: "Killed" });
+    expect(task.phase === "triage" && task.step).toEqual({ kind: "queued" });
+  });
+
+  test("ending before its start reply arrives still holds the task", () => {
+    const { task } = run(add(), start, workspaceCreated(1), sessionEnded(2, planner, null, "x"));
+
+    expect(task.hold).toEqual({ kind: "crashed", exitCode: null, lastLine: "x" });
+  });
+
+  test("an end report for another session is refused", () => {
+    const other = SessionId.parse("session-other");
+
+    expect(next(triageRunning().task, sessionEnded(2, other))).toEqual({
+      ok: false,
+      rejection: { input: "session_ended", reason: "#142's agent isn't session-other." },
+    });
   });
 });

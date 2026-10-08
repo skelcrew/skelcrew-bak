@@ -79,6 +79,10 @@ function inTriage(task: TaskIn<"triage">, event: TaskEvent): Evolved {
       return ok({ ...task, workspace: event.workspace });
     case "session.requested":
       return ok(withRequest(task, event.request, { kind: "starting", request: event.request }));
+    case "session.started":
+      if (task.step.kind !== "starting")
+        return refuse(event, `#${task.id} isn't starting a session`);
+      return ok({ ...task, step: { kind: "running", session: event.session } });
     default:
       return refuse(event, `#${task.id} is in triage`);
   }

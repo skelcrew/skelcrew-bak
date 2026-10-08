@@ -103,3 +103,22 @@ export const sessionStarted = (request: number, session: SessionId): Input => ({
   request,
   session,
 });
+
+export const sessionFailed = (request: number, message = "claude not found"): Input => ({
+  by: "plugin",
+  type: "session_failed",
+  request,
+  message,
+});
+
+export const sessionEnded = (
+  request: number,
+  session: SessionId,
+  exitCode: number | null = 1,
+  lastLine = "Segmentation fault",
+): Input => ({ by: "plugin", type: "session_ended", request, session, exitCode, lastLine });
+
+// A task in triage whose planner is running, as request 2.
+export function triageRunning(): Run {
+  return run(add(), start, workspaceCreated(1), sessionStarted(2, planner));
+}
