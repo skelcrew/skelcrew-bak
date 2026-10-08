@@ -11,7 +11,6 @@ import type { BranchFacts, Command, Input, TaskId } from "../core/types";
 export class FakeTools {
   // Each answer given, by command and request.
   private readonly answers = new Map<string, Input | null>();
-  private commits = 0;
 
   // `conflicts` says whether merging main into a task conflicts this time.
   // Never, unless given.
@@ -87,7 +86,10 @@ export class FakeTools {
           by: "plugin",
           type: "main_merged",
           request: command.request,
-          reviewed: { head: this.commit(), changedFiles: ["src/x.ts"] },
+          reviewed: {
+            head: this.commit(`merge:${command.taskId}:${command.request}`),
+            changedFiles: ["src/x.ts"],
+          },
         };
 
       case "deliver": {
@@ -109,17 +111,17 @@ export class FakeTools {
     }
   }
 
-  // What git would say about a task's branch when its agent is done: a new
-  // commit, with one file changed.
-  branch(): BranchFacts {
-    return { head: this.commit(), changedFiles: ["src/x.ts"] };
+  // What git would say about a task's branch when its agent is done: a
+  // commit named by `key`, such as the task and the moment, with one file
+  // changed.
+  branch(key: string): BranchFacts {
+    return { head: this.commit(`branch:${key}`), changedFiles: ["src/x.ts"] };
   }
 
-  // A new commit, never the same as one before. Shared with the simulator's
-  // builders, so no two commits are confused.
-  commit(): CommitSha {
-    this.commits++;
-    return CommitSha.parse(this.commits.toString(16).padStart(40, "0"));
+  // A commit named by what made it, so the same command gets the same commit
+  // after a restart, and different ones never share one.
+  private commit(key: string): CommitSha {
+    return CommitSha.parse(new Bun.CryptoHasher("sha1").update(key).digest("hex"));
   }
 }
 

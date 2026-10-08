@@ -124,7 +124,11 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
     }
     const loop = opened.loop;
 
-    const context = { loop, tokens, branchOf: options.branchOf ?? (() => fakes.branch()) };
+    const context = {
+      loop,
+      tokens,
+      branchOf: options.branchOf ?? ((task) => fakes.branch(`${task.id}:${task.requests}`)),
+    };
     const listening = await listen(paths.socket, (line) => answerLine(context, line));
     undo.push(() => rmSync(paths.socket, { force: true }));
     // Each tick runs between requests, never during one, since both run on

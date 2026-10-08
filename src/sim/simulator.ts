@@ -377,7 +377,7 @@ export class Simulator {
             options: ["This", "That"],
           };
         }
-        const branch = this.fakes.branch();
+        const branch = this.fakes.branch(`${taskId}:${session}`);
         if (behaviour.intent === "answer") {
           return {
             by: "agent",
