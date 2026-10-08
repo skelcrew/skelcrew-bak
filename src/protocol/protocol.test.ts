@@ -30,7 +30,8 @@ const done: Request = {
 
 describe("a request", () => {
   test("reads back as it was sent", () => {
-    for (const request of [add, done, { ...add, call: { type: "ls" as const } }]) {
+    const ls: Request = { ...add, call: { type: "ls" } };
+    for (const request of [add, done, ls]) {
       expect(parseRequest(encode(request).trimEnd())).toEqual({ ok: true, value: request });
     }
   });

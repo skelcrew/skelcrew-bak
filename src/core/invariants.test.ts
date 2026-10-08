@@ -23,6 +23,7 @@ import type {
   Command,
   Config,
   Input,
+  Rigor,
   Role,
   Task,
   TaskEvent,
@@ -138,7 +139,11 @@ function candidates(world: World): Input[] {
     // Every session may send any role's reports, so a report from the
     // wrong role is tried too (rule 2).
     {
-      const plan = { rigor: "full" as const, approve: false, brief: "Do it." };
+      const plan: { rigor: Rigor; approve: boolean; brief: string } = {
+        rigor: "full",
+        approve: false,
+        brief: "Do it.",
+      };
       inputs.push(
         {
           by: "agent",
@@ -242,7 +247,11 @@ function repliesTo(command: Command): Input[] {
     case "stop_session": {
       const { request, session } = command;
       if (request === null) return [];
-      const outcomes = ["saved", "nothing_to_save", "save_failed"] as const;
+      const outcomes: ("saved" | "nothing_to_save" | "save_failed")[] = [
+        "saved",
+        "nothing_to_save",
+        "save_failed",
+      ];
       return [
         ...outcomes.map(
           (saved): Input => ({

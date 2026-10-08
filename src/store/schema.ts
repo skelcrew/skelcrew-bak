@@ -124,7 +124,7 @@ function event<T extends string, S extends z.ZodRawShape>(type: T, shape: S) {
 
 const request = z.number().int().positive();
 
-const events = [
+const events = z.union([
   event("task.received", {
     title: z.string(),
     description: z.string().nullable(),
@@ -195,12 +195,12 @@ const events = [
   event("usage.recorded", { session: SessionId, usage }),
   event("task.killed", {}),
   event("task.failed", { reason: z.string() }),
-] as const;
+]);
 
-export const taskEvent: z.ZodType<TaskEvent> = z.union(events);
+export const taskEvent: z.ZodType<TaskEvent> = events;
 
 // Fails to compile if an event type has no schema above.
-type Covered = z.infer<(typeof events)[number]>["type"];
+type Covered = z.infer<typeof events>["type"];
 const everyEventHasASchema: Exclude<TaskEvent["type"], Covered> extends never ? true : false = true;
 void everyEventHasASchema;
 
@@ -235,7 +235,7 @@ const sessionContext: z.ZodType<SessionContext> = z.strictObject({
 
 const removal = z.strictObject({ path: z.string(), deleteBranch: z.boolean() });
 
-const commands = [
+const commands = z.union([
   z.strictObject({ type: z.literal("create_workspace"), taskId: TaskId, request }),
   z.strictObject({ type: z.literal("create_copy"), taskId: TaskId, request, commit: CommitSha }),
   z.strictObject({
@@ -278,12 +278,12 @@ const commands = [
     handover,
     evidence: z.string().nullable(),
   }),
-] as const;
+]);
 
-export const command: z.ZodType<Command> = z.union(commands);
+export const command: z.ZodType<Command> = commands;
 
 // Fails to compile if a command type has no schema above.
-type CoveredCommand = z.infer<(typeof commands)[number]>["type"];
+type CoveredCommand = z.infer<typeof commands>["type"];
 const everyCommandHasASchema: Exclude<Command["type"], CoveredCommand> extends never
   ? true
   : false = true;
