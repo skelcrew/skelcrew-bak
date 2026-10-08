@@ -52,7 +52,7 @@ Everything else is in Later.
 - **Phase**: triage, build or review. Always in that order; review is the only optional one.
 - **Intent**: what the task produces: `ship`, `try` or `answer`.
 - **Rigor**: how much care it gets: `light` or `full`. Plus an **approval** flag for work that needs your sign off.
-- **Role**: who works a phase: planner (triage), builder (build), tester (review). A role is a config entry: instructions, harness, model.
+- **Role**: who works a phase: planner (triage), builder (build), tester (review). A role is a config entry: instructions, harness, model. Skelcrew puts a fixed protocol preamble before your instructions.
 - **Workspace**: where an agent works. A git worktree in the MVP.
 - **Session**: an interactive harness running in a workspace, inside tmux. Never headless, so you can always attach.
 - **Event**: everything that happens to a task, in an append only log. State is derived from events.
@@ -257,7 +257,7 @@ A session is a harness running interactively in a workspace, inside tmux. The se
 - **Attach.** `skel attach 142` attaches to the session with `ctrl-]` bound to detach.
 - **Messages in** (answers, nudges). The runner types the text literally (`send-keys -l`), then sends Enter on its own. The Claude Code profile wraps the text in bracketed paste marks, after stripping control codes; otherwise Claude Code treats a long message as a paste, and Enter only adds a new line. A trailing `;` is escaped, or tmux reads it as a command separator.
 - **Stop.** SIGTERM to the pane's process group, then SIGKILL, then the tmux session is killed. Before a stop for pause or kill, before merging main in, and before removing a workspace, Skelcrew commits any uncommitted work itself (`git add --all` and a commit), so no work is lost.
-- **Resume.** A paused or crashed session comes back with `claude --resume <uuid>` in the same workspace, so it keeps its context.
+- **Resume.** A paused session comes back with `claude --resume <uuid>` in the same workspace, so it keeps its context. A crashed session is retried with a fresh session instead (see Failure handling).
 - **Usage.** The profile reads the transcript (`~/.claude/projects/*/<uuid>.jsonl`). Tokens are input, output and cache writes, counted once per message; cache reads are kept separately, since they would swamp the rest. Working minutes count from each prompt to the agent's last line before the next one, so waiting time doesn't count. Usage is read every few minutes and when a session ends.
 - **Activity.** The transcript is also the activity signal: a session with no new transcript line for 20 minutes, and no open question, has stalled.
 
@@ -286,6 +286,14 @@ skel changes findings.md
 
 - **Who is calling.** Each session gets a secret token in an environment variable. The daemon maps it to a task, role and phase, and refuses anything outside them: a builder can't pass its own review. No token means the human. (Not a lock under `none`, see Workspaces.)
 - **One open question per task.**
+- **A fixed protocol preamble per role.** Each session starts with a preamble that ships with Skelcrew, followed by your short instructions for that role from config. The preamble describes the interface, not how to do the work:
+  - the `skel` commands the role has, and that nobody is watching the session
+  - every wait for you goes through `skel ask`, whether a question or something you must do first; a request written into the conversation reaches nobody
+  - one question at a time, with options, the recommended one first; your answer arrives as the next message in the session
+  - commit often (builder)
+  - the turn ends only after `done`, `give-up`, `ask`, or a refusal that says to stop
+
+  It passes the twice-as-good test, since it describes the interface rather than compensating for a weaker model. It is versioned with Skelcrew and not configurable.
 - **Short replies**, like chat messages.
 - **Commands answer at once with accepted or rejected**, except `done`.
 - **`ask` doesn't wait for your answer.** It returns once the question is recorded, and the agent ends its turn. Your answer is typed into its session later, once it has a slot again.
@@ -303,32 +311,29 @@ evolve(state, event)         -> state
 
 - **No hidden inputs.** Time and IDs are passed in, so replay reproduces bugs exactly.
 - **Request numbers.** Every command expecting a reply (start a session, create a workspace, merge main, deliver output) carries a number from a counter on the task. A late or repeated reply is refused, so finished work can't hijack a task that has moved on. A late reply is also cleaned up: a session that starts late is stopped, and a workspace created late is removed. A report that a session ended names the session, so an old session's end can't fail the current one.
+- **Replay never judges.** Replay runs `evolve` alone, so old events are never judged again by rules that have changed since.
+
+### The loop
+
+The daemon runs every input through the same loop, one input at a time:
+
+1. `decide` accepts or rejects the input.
+2. The events, the commands, and which starts the decision sent out or answered are saved in **one transaction**. If the save fails, nothing else happens: the task doesn't change and no command goes out.
+3. `evolve` applies the events.
+4. The commands go to the tools. Each reply comes back later as a new input.
+
+**The outbox.** Saved commands form an outbox. A command is marked done only when its tool has finished. For a command that expects a reply, that means once the reply has been handled: saved, or refused as late. A reply that can't be saved is sent again until it is.
+
+**Tools are idempotent.** After a crash, a command can go out twice, so a repeat must change nothing. For example, a second "start #142, request 7" starts no second session, and a second "create workspace" gives back the same one.
 
 ### Task state
 
-```ts
-type Task = {
-  id: number                 // shown as #142
-  source: string             // "local", "github"
-  sourceId: string
-  title: string
-  phase: "triage" | "build" | "review"
-  status: "queued" | "running" | "waiting" | "with_you" | "paused"
-        | "done" | "split" | "declined" | "killed" | "failed"
-  intent?: "ship" | "try" | "answer"
-  rigor?: "light" | "full"
-  approve: boolean
-  brief?: string
-  specPath?: string
-  branch?: string
-  workspace?: { id: string; path: string }
-  session?: { id: string; role: "planner" | "builder" | "tester"; harnessSessionId?: string }
-  loops: number
-  question?: { text: string; options: string[] }
-  requestSeq: number
-  usage: { tokens: number; workingMinutes: number }
-}
-```
+Two rules shape the types:
+
+- **Each phase carries only the data it needs and has its own small step machine, so impossible states can't be written down.** For example, only a task in review has a handed-over commit. Build moves through steps such as queued, creating a workspace, starting a session and running, and each step that waits on a reply holds its request number.
+- **Inputs are typed by sender, so an agent can't approve.** Every input comes from you, an agent, a plugin or the daemon itself. An agent's call can only become an agent input, and no agent input approves, answers, sets intent or rigor, or kills.
+
+Besides its phase and step, a task holds its source and source ID, its title, intent, rigor and approval flag once triaged, the brief and spec path, its branch, workspace and session, any side state (waiting on you, with you, paused) or ending, the open question, the build and review loop count, the request counter, and its usage.
 
 ### Events
 
@@ -372,6 +377,8 @@ Property tested, and approved before implementation:
 - Running tasks never exceed `max_running`, including during a swap.
 - A paused task never restarts without you.
 - No workspace or session is ever left untracked.
+- Every saved command is carried out at least once, and carrying it out twice has the effect of once.
+- A failed save changes nothing: no state change, no command sent.
 - Nothing leaves an ending.
 
 ## Keeping up with main
@@ -393,10 +400,20 @@ Every failure that reaches you says what happened in one line and offers the act
 
 SQLite on the machine running the daemon.
 
-- **Stored:** the event log, the task projection derived from it, and mappings from source IDs to workspace, session, branch and PR.
+- **Stored:** the event log, the task projection derived from it, the outbox of commands not yet carried out, the starts in flight, the sessions Skelcrew started, and mappings from source IDs to workspace, session, branch and PR.
 - **Not stored:** tasks themselves (tracker or local inbox), code and specs (the repo, specs in `docs/plans`), transcripts (the harness; Skelcrew keeps a pointer, which is what makes resume work), secrets (environment or keychain).
 
-**Recovery.** On restart, the daemon rebuilds state from the log, checks each workspace and session, and reattaches, resumes, or restarts the step from the last commit. Losing the database loses control of in flight tasks and history, never work.
+**One daemon per repository.** The daemon holds an operating system file lock (`flock`) while it runs. The lock ends with the process however it ends, so two daemons never run the same log, and no PID file is trusted.
+
+**Recovery.** On restart, in this order:
+
+1. **Rebuild** every task by replaying the log through `evolve`. An event that can't be read or doesn't fit stops the start with its position, rather than rebuilding a wrong task.
+2. **Resend** every command in the outbox that wasn't marked done, including one whose work was still going on when the daemon died. The tools treat a repeat as a no-op.
+3. **Count starts in flight** from the store, so slots stay right before any reply arrives.
+4. **Find the sessions.** The runner lists the sessions still open. A session that ended while no daemon ran is reported with its real exit code. A recorded session the runner no longer has is reported as ended (`crashed`, "Skelcrew restarted"). Both then go through normal crash handling (see Failure handling). A session the runner has but the store doesn't is stopped.
+5. **Run the scheduler.**
+
+Losing the database loses control of in flight tasks and history, never work.
 
 ## Plugins
 
@@ -487,6 +504,7 @@ Watching diffs is optional: the tester's findings and evidence are the default w
 
 ```yaml
 # skelcrew.yaml
+# Each role's instructions follow Skelcrew's fixed protocol preamble (see Agent protocol).
 roles:
   planner:
     harness: claude
