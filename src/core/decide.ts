@@ -444,7 +444,8 @@ function conversation(
   }
 }
 
-// Replies about workspaces and sessions, and usage readings.
+// Replies about workspaces and sessions, and usage readings. A reply gets
+// here only if the task waits for it: lateReply has dealt with any other.
 function replies(
   task: Task,
   input: Extract<
@@ -465,21 +466,12 @@ function replies(
     // A workspace, or the tester's copy, couldn't be made. The task waits
     // for your retry.
     case "workspace_failed":
-      if (!waitingForWorkspace(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
       return ctx.accept([held({ kind: "failed", step: "workspace", message: input.message })]);
 
     case "session_started":
-      if (!waitingForSession(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
       return ctx.accept([{ type: "session.started", session: input.session }]);
 
     case "session_failed":
-      if (!waitingForSession(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
       return ctx.accept([held({ kind: "failed", step: "session", message: input.message })]);
 
     // A session that ends without reporting has crashed or quit, so the task
@@ -487,24 +479,17 @@ function replies(
     // old session's end can't hold the task. It also names the request that
     // started the session, so an end that arrives before the start reply
     // still counts.
-    case "session_ended": {
-      const current = runningSession(task) === input.session;
-      if (!current && !waitingForSession(task, input.request)) {
-        return ctx.reject(`#${task.id}'s agent isn't ${input.session}.`);
-      }
+    case "session_ended":
       return ctx.accept([
         held({ kind: "crashed", exitCode: input.exitCode, lastLine: input.lastLine }),
       ]);
-    }
 
     // The stop of an agent the task let go is confirmed, with its work saved.
     // Now the task can go on: see afterStop. A failed save holds the task,
     // and its workspace is never removed.
     case "stopped": {
       const { stopping } = task;
-      if (stopping === null || stopping.request !== input.request) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
+      if (stopping === null) return ctx.reject(notWaitingFor(task, input.request));
       // Only a stop that saves can fail to save. Anything else found nothing.
       const saved =
         stopping.saves || input.saved !== "save_failed" ? input.saved : "nothing_to_save";
@@ -637,9 +622,6 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
   switch (input.type) {
     // The planner starts in the new workspace, read only.
     case "workspace_created": {
-      if (!waitingForWorkspace(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
       const planner = startPlanner(task, input.workspace, next(task));
       return ctx.accept(
         [{ type: "workspace.created", workspace: input.workspace }, ...planner.events],
@@ -732,9 +714,6 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
 function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
   switch (input.type) {
     case "workspace_created": {
-      if (!waitingForWorkspace(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
       const builder = startBuilder(task, input.workspace, task.plan, task.feedback, next(task));
       return ctx.accept(
         [{ type: "workspace.created", workspace: input.workspace }, ...builder.events],
@@ -839,9 +818,6 @@ function inReview(task: TaskIn<"review">, input: Input, ctx: Context): Decision 
     // The tester starts in its own copy of the reviewed commit, read only,
     // told what the builder handed over.
     case "copy_created": {
-      if (!waitingForWorkspace(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
       // A copy of any other commit would review something that isn't
       // delivered. It is removed, and the task waits for you.
       if (input.copy.commit !== task.reviewed.head) {
