@@ -25,5 +25,5 @@ split into tasks here.
       the count of starts in flight.
 - [x] **Simulator.** The loop with fake tools and scripted agents, so whole lifecycles run in
       tests, including several tasks sharing `max_running`.
-- [ ] **Loop property test.** Random inputs through the real loop and store, with failed saves
+- [x] **Loop property test.** Random inputs through the real loop and store, with failed saves
       and restarts at random moments. Checks rules 10, 16, 17 and 22.
