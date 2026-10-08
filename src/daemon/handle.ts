@@ -2,7 +2,7 @@
 // or reads the tasks for `skel ls`, and says what came of it.
 
 import { TaskId } from "../core/ids";
-import type { Task, YourInput } from "../core/types";
+import type { AgentInput, Task, YourInput } from "../core/types";
 import type { Loop } from "../loop/loop";
 import {
   type Answer,
@@ -14,30 +14,35 @@ import {
   type WireInput,
 } from "../protocol/protocol";
 import { refusal } from "./server";
+import type { Tokens } from "./tokens";
 
 type Handled = { ok: true; result: Result } | { ok: false; message: string };
 
 // One line in, one line out. A line that can't be read is refused, and the
 // daemon carries on.
-export function answerLine(loop: Loop, line: string): string {
+export function answerLine(loop: Loop, tokens: Tokens, line: string): string {
   const parsed = parseRequest(line);
   if (!parsed.ok) return refusal(parsed.message);
   const { id, token, call } = parsed.value;
-  const handled = handle(loop, call, token);
+  const handled = handle(loop, tokens, call, token);
   const answer: Answer = handled.ok
     ? { v: VERSION, id, ok: true, result: handled.result }
     : { v: VERSION, id, ok: false, message: handled.message };
   return `${JSON.stringify(answer)}\n`;
 }
 
-export function handle(loop: Loop, call: Call, token: string | null): Handled {
+// A call with a token comes from that token's session, and goes to the task
+// the session works on. One without comes from you. Which inputs each may
+// send is checked here, and the core refuses anything outside the session's
+// role and phase.
+export function handle(loop: Loop, tokens: Tokens, call: Call, token: string | null): Handled {
   if (call.type === "ls") return { ok: true, result: { kind: "tasks", tasks: rows(loop) } };
+  if (token !== null) return fromAgent(loop, tokens, call.input, token);
 
-  // Session tokens come with the agents' commands.
-  if (token !== null) return { ok: false, message: "Agents' commands aren't in yet." };
   const input = yours(call.input);
   if (input === null) {
-    return { ok: false, message: `\`${call.input.type}\` is an agent's command.` };
+    const message = `\`${call.input.type}\` is an agent's command. It needs the session's token in SKELCREW_SESSION.`;
+    return { ok: false, message };
   }
 
   // A new task gets the next number. Every other input names its task.
@@ -47,6 +52,49 @@ export function handle(loop: Loop, call: Call, token: string | null): Handled {
   if (!decision.ok) return { ok: false, message: decision.rejection.reason };
   return { ok: true, result: { kind: "sent", task: taskId } };
 }
+
+function fromAgent(loop: Loop, tokens: Tokens, wire: WireInput, token: string): Handled {
+  const session = tokens.sessionOf(token);
+  if (session === null) {
+    return { ok: false, message: "That session token isn't one this daemon gave." };
+  }
+  if (yours(wire) !== null) {
+    const message = `Only you can send \`${wire.type}\`, and this call comes from an agent's session.`;
+    return { ok: false, message };
+  }
+  const input = agents(wire);
+  if (input === null) return { ok: false, message: `\`${wire.type}\` isn't in yet.` };
+
+  const task = loop
+    .all()
+    .find((t) => t.phase !== "ended" && t.step.kind === "running" && t.step.session === session);
+  if (task === undefined) {
+    return { ok: false, message: `Session ${session} no longer works on a task.` };
+  }
+  const decision = loop.send(task.id, { by: "agent", session, ...input });
+  if (!decision.ok) return { ok: false, message: decision.rejection.reason };
+  return { ok: true, result: { kind: "sent", task: task.id } };
+}
+
+// The input as an agent's, without its session, or null when it is yours.
+// `done` waits for the daemon to read the branch from git, so it isn't in yet.
+function agents(input: WireInput): DistributiveOmit<AgentInput, "session"> | null {
+  switch (input.type) {
+    case "triage_proceed":
+    case "triage_split":
+    case "triage_decline":
+    case "ask":
+    case "progress":
+    case "give_up":
+    case "pass":
+    case "changes":
+      return input;
+    default:
+      return null;
+  }
+}
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 // The input as one of yours, or null when it is an agent's.
 function yours(input: WireInput): YourInput | null {

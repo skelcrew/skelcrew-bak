@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { TaskId } from "../core/ids";
+import { SessionId, TaskId } from "../core/ids";
 import type { Call } from "../protocol/protocol";
 import { send } from "./client";
 import { type Daemon, serve } from "./daemon";
@@ -151,6 +151,79 @@ describe("the daemon's fake tools", () => {
     });
 
     expect(state).toBe("running");
+  });
+});
+
+describe("who is calling", () => {
+  // A daemon whose planner for task 1 is running, and that planner's token.
+  async function withPlanner() {
+    const served = await serve(folder(), { socketFolder: join(folder(), "sockets"), tickMs: 10 });
+    if (!served.ok) throw new Error(served.message);
+    running.push(served.daemon);
+    const daemon = served.daemon;
+    await send(daemon.socket, add("Fix the export"));
+    await untilAsync(async () => {
+      const listed = await send(daemon.socket, { type: "ls" });
+      return (
+        listed.ok && listed.result.kind === "tasks" && listed.result.tasks[0]?.state === "running"
+      );
+    });
+    // The fake tools name a session after its task and request.
+    return { daemon, token: daemon.tokenFor(SessionId.parse("s-1-2")) };
+  }
+
+  const progress: Call = {
+    type: "send",
+    task: null,
+    input: { type: "progress", text: "Reading the export code." },
+  };
+
+  test("hears an agent by its token, on its own task", async () => {
+    const { daemon, token } = await withPlanner();
+
+    expect(await send(daemon.socket, progress, token)).toEqual({
+      ok: true,
+      result: { kind: "sent", task: TaskId.parse(1) },
+    });
+  });
+
+  test("refuses a token it didn't give", async () => {
+    const { daemon } = await withPlanner();
+
+    expect(await send(daemon.socket, progress, "s-1-2.0123")).toEqual({
+      ok: false,
+      message: "That session token isn't one this daemon gave.",
+    });
+  });
+
+  test("refuses your commands from an agent", async () => {
+    const { daemon, token } = await withPlanner();
+    const approve: Call = { type: "send", task: TaskId.parse(1), input: { type: "approve" } };
+
+    expect(await send(daemon.socket, approve, token)).toEqual({
+      ok: false,
+      message: "Only you can send `approve`, and this call comes from an agent's session.",
+    });
+  });
+
+  test("refuses an agent's command without a token", async () => {
+    const { daemon } = await withPlanner();
+
+    expect(await send(daemon.socket, { ...progress, task: TaskId.parse(1) })).toEqual({
+      ok: false,
+      message:
+        "`progress` is an agent's command. It needs the session's token in SKELCREW_SESSION.",
+    });
+  });
+
+  test("refuses a session that no longer works on a task", async () => {
+    const { daemon, token } = await withPlanner();
+    await send(daemon.socket, { type: "send", task: TaskId.parse(1), input: { type: "kill" } });
+
+    expect(await send(daemon.socket, progress, token)).toEqual({
+      ok: false,
+      message: "Session s-1-2 no longer works on a task.",
+    });
   });
 });
 

@@ -63,7 +63,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
 - [x] **Fake tools in the daemon.** Workspaces, sessions and merges faked behind the tools
       interface, shared with the simulator rather than copied. Milestone 4 replaces them
       with git and tmux.
-- [ ] **Who is calling.** Each session gets a secret token. A request carrying one is
+- [x] **Who is calling.** Each session gets a secret token. A request carrying one is
       mapped to its task, role and phase, and anything outside them is refused. No token
       means you.
 - [ ] **Your commands.** `skel add`, `ls`, `set`, `reply`, `approve`, `deny`, `pause`,

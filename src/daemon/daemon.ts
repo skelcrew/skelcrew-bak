@@ -3,7 +3,9 @@
 // answers requests on a local socket until it is stopped.
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { readConfig } from "../config/config";
+import type { SessionId } from "../core/ids";
 import { Loop, type Tools } from "../loop/loop";
 import { FakeTools } from "../sim/fakes";
 import { EventStore } from "../store/store";
@@ -11,9 +13,12 @@ import { answerLine } from "./handle";
 import { takeLock } from "./lock";
 import { daemonPaths, ownSocketFolder } from "./paths";
 import { listen } from "./server";
+import { loadSecret, Tokens } from "./tokens";
 
 export type Daemon = {
   socket: string;
+  // The token a session gets in SKELCREW_SESSION.
+  tokenFor(session: SessionId): string;
   // Stops listening, closes the store and lets go of the lock.
   stop(): Promise<void>;
 };
@@ -81,7 +86,8 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   }
   const loop = opened.loop;
 
-  const listening = await listen(paths.socket, (line) => answerLine(loop, line));
+  const tokens = new Tokens(loadSecret(join(paths.folder, "secret")));
+  const listening = await listen(paths.socket, (line) => answerLine(loop, tokens, line));
   // Each tick runs between requests, never during one, since both run on
   // this one thread and neither waits.
   const ticking = setInterval(() => {
@@ -92,6 +98,7 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
     ok: true,
     daemon: {
       socket: paths.socket,
+      tokenFor: (session) => tokens.tokenFor(session),
       stop: async () => {
         clearInterval(ticking);
         await listening.stop();
