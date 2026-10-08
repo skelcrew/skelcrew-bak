@@ -93,7 +93,7 @@ flowchart TB
 - **The scheduler** is where orchestration lives: plain code that decides which task gets a slot, which role starts where, and where questions go. There is no supervising agent. The planner comes closest, but it shapes one task once, up front, and hands back data.
 - **Clients** (CLI, TUI) talk to the daemon over a local socket and hold no state. Messages are versioned, so the same protocol can later be exposed over the network.
 - **Plugins** connect the daemon to the outside world. Agents never talk to the tracker, GitHub or you directly.
-- **Agents** get their context when a session starts and act only through `skel` commands. Messages into a session (answers, nudges) go through the session runner.
+- **Agents** get their context when a session starts and act only through `skel` commands. Messages into a session (answers) go through the session runner.
 
 The reducer is small enough to be a few hundred lines. The daemon around it isn't: slot accounting, recovery and the outbox are real work.
 
@@ -111,10 +111,10 @@ Adding a task is the commitment: build this. Skelcrew is an orchestration tool w
 
 `max_running` sets how many agents work at once. A running task holds one slot. A task waiting on you or held holds none. A task you are attached to keeps its slot, since its agent keeps working with you. A task keeps its slot when it moves from one phase to the next, so work under way finishes before new work starts.
 
-- **Pause** (`skel pause 142`): the agent stops, Skelcrew commits any uncommitted work, and the workspace and harness session are kept. The task frees its slot and never restarts on its own.
-- **Resume** (`skel resume 142`): the task goes to the front of the queue, continuing its harness session where it left off.
-- **Start now** (`skel start 145`): starts immediately if a slot is free. If not, `skel start 145 --pause 142` pauses #142 and puts #145 first in line. #145 starts once #142's stop has finished, so running agents never exceed `max_running`, and no other task can take the slot in between.
-- **Order**: tasks you started now first, then answers to questions, then resumed tasks, then queued tasks. Oldest first within each.
+- **Pause** (`skel pause 142`): the agent stops, Skelcrew commits any uncommitted work, and the workspace is kept. The task frees its slot and never restarts on its own.
+- **Resume** (`skel resume 142`): the task goes to the front of the queue. A fresh session starts in the same workspace, given the brief, the commits so far, and why it is back.
+- **Start now** (`skel start 145`): starts at once, even when every slot is taken. `max_running` only limits what Skelcrew starts on its own. You can always go past it.
+- **Order**: answers to questions first, then resumed tasks, then queued tasks. Oldest first within each.
 - **Starts and stops in flight hold a slot.** A session that has been asked to start holds its slot from the request, not from when it reports in. A session being stopped holds its slot until the stop finishes. Starts in flight are stored, so a restart still counts them.
 
 ## Task lifecycle
@@ -224,6 +224,8 @@ spec: docs/plans/142-empty-export.md   # only when the planner judged one needed
   - **intent** restarts build with a fresh session on the same branch, since the permissions change
   - **intent and rigor together during triage** end triage, as `skel add --ship --light` would skip it
 
+  `skel set` is never refused for timing. While a workspace or session is starting, it waits until the step settles, then applies. A change to `answer` after commits is allowed: the branch's code stays where it is, and only the report is handed over.
+
 ## Review
 
 The tester works in its own workspace, checked out at the **reviewed commit**: the builder's handed-over work with main merged in. Nothing the builder does afterwards can change what was checked. The workspace is a detached worktree (`git worktree add --detach`), since git won't check out the task's branch twice. It is writable, since `setup` and the tests write files, but nothing in it is committed or flows back. Skelcrew removes it once the verdict is in.
@@ -265,14 +267,14 @@ Under `none`, the rules hold for agents that use Skelcrew's protocol, but an age
 
 A session is a harness running interactively in a workspace, inside tmux. The session runner (tmux) and the harness profile (Claude Code) split the work: the runner holds terminals, the profile knows the harness.
 
-- **Start.** Skelcrew picks the harness session ID up front (`claude --session-id <uuid>`) and stores it on the task. The transcript, usage and resume are all found through it. The session gets `SKELCREW_SESSION` and `SKELCREW_TASK` in its environment. Claude Code's own child session variables are removed, or it writes no transcript.
+- **Start.** Skelcrew picks the harness session ID up front (`claude --session-id <uuid>`) and stores it on the task. The transcript and usage are found through it. The session gets `SKELCREW_SESSION` and `SKELCREW_TASK` in its environment. Claude Code's own child session variables are removed, or it writes no transcript.
 - **tmux.** Skelcrew runs its own tmux server per repository (`-L skelcrew-<hash>`, `-f /dev/null`), so your own tmux setup is never touched. Panes stay after their process exits (`remain-on-exit`), so Skelcrew can read the exit code and the last lines of output. After a restart, the daemon finds its sessions again with `list-panes -a`.
 - **Attach.** `skel attach 142` attaches to the session with `ctrl-]` bound to detach.
-- **Messages in** (answers, nudges). The runner types the text literally (`send-keys -l`), then sends Enter on its own. The Claude Code profile wraps the text in bracketed paste marks, after stripping control codes; otherwise Claude Code treats a long message as a paste, and Enter only adds a new line. A trailing `;` is escaped, or tmux reads it as a command separator.
+- **Messages in** (answers). The runner types the text literally (`send-keys -l`), then sends Enter on its own. The Claude Code profile wraps the text in bracketed paste marks, after stripping control codes; otherwise Claude Code treats a long message as a paste, and Enter only adds a new line. A trailing `;` is escaped, or tmux reads it as a command separator.
 - **Stop.** SIGTERM to the pane's process group, then SIGKILL, then the tmux session is killed. Only then does Skelcrew commit any uncommitted work itself (`git add --all` and a commit), so the agent can't edit after the save. Skelcrew also commits before merging main in. If a save fails, the task is held and the workspace is never removed. The next agent on a task starts only once the last one's stop is confirmed.
-- **Resume.** A paused session comes back with `claude --resume <uuid>` in the same workspace, so it keeps its context. A crashed session is retried with a fresh session instead (see Failure handling).
+- **No resume.** Every session starts fresh, given the brief, the branch, and why it is there. `claude --resume` restores the conversation but silently drops the `--settings` allow list, and text typed in its first second is lost.
 - **Usage.** The profile reads the transcript (`~/.claude/projects/*/<uuid>.jsonl`). Tokens are input, output and cache writes, counted once per message; cache reads are kept separately, since they would swamp the rest. Working minutes count from each prompt to the agent's last line before the next one, so waiting time doesn't count. Usage is read every few minutes and when a session ends.
-- **Activity.** The transcript is also the activity signal: a session with no new transcript line for 20 minutes, and no open question, has stalled.
+- **Activity, shown not acted on.** The transcript tells what an agent is doing: an assistant line waiting on a tool result means a command is running, and a `turn_duration` line means the turn has ended. Skelcrew shows it, such as "#142 quiet 25 min, running a command". You decide what to do about it.
 
 ## Agent protocol
 
@@ -299,7 +301,6 @@ skel changes findings.md
 
 - **Who is calling.** Each session gets a secret token in an environment variable. The daemon maps it to a task, role and phase, and refuses anything outside them: a builder can't pass its own review. No token means the human. (Not a lock under `none`, see Workspaces.)
 - **One open question per task.**
-- **An agent that asks must stop working.** Skelcrew checks: a new transcript line while its question is open holds the task.
 - **A fixed protocol preamble per role.** Each session starts with a preamble that ships with Skelcrew, followed by your short instructions for that role from config. The preamble describes the interface, not how to do the work:
   - the `skel` commands the role has, and that nobody is watching the session
   - every wait for you goes through `skel ask`, whether a question or something you must do first; a request written into the conversation reaches nobody
@@ -309,9 +310,9 @@ skel changes findings.md
 
   It passes the twice-as-good test, since it describes the interface rather than compensating for a weaker model. It is versioned with Skelcrew and not configurable.
 - **Short replies**, like chat messages.
-- **Commands answer at once with accepted or rejected**, except `done`.
+- **Commands answer at once** with accepted or rejected.
 - **`ask` doesn't wait for your answer.** It returns once the question is recorded, and the agent ends its turn. Your answer is typed into its session later, once it has a slot again.
-- **`done` waits for the outcome:** review's verdict, or done when the intent has no review. So the builder hears the result in its own session, which matters when you're attached and working with it.
+- **`done` ends the builder's work.** The builder's session is stopped. If review asks for changes, a fresh builder starts with the findings. Claude Code moves a shell command to the background after 2 minutes, so a `done` that waited for a verdict would quietly stop waiting.
 - **The session token is not the request number.** The token says who is calling. The request number (see Core model) says which request a reply belongs to.
 
 ## Core model
@@ -338,7 +339,7 @@ The daemon runs every input through the same loop, one input at a time:
 
 **The outbox.** Saved commands form an outbox. A command is marked done only when its tool has finished. For a command that expects a reply, that means once the reply has been handled: saved, or refused as late. A reply that can't be saved is sent again until it is.
 
-**Tools are idempotent.** After a crash, a command can go out twice, so a repeat must change nothing. For example, a second "start #142, request 7" starts no second session, and a second "create workspace" gives back the same one. Typing into a session is the exception. It is recorded as sent before it is typed, so a crash in between loses the message rather than typing it twice. A lost message shows up as a stall, and the nudge repeats it.
+**Tools are idempotent.** After a crash, a command can go out twice, so a repeat must change nothing. For example, a second "start #142, request 7" starts no second session, and a second "create workspace" gives back the same one. Typing into a session is the exception. It is recorded as sent before it is typed, so a crash in between loses the message rather than typing it twice. A lost message shows as an idle agent, and you can reply again.
 
 ### Task state
 
@@ -371,8 +372,7 @@ Besides its phase and step, a task holds its source and source ID, its title, in
 | `proposals.approved` / `proposals.denied` | your call on tasks proposed by a split or an answer; each approved one arrives as its own `task.received` |
 | `output.delivered` | the output plugin confirmed; the task is done |
 | `output.failed` | a delivery attempt failed; retried with backoff |
-| `agent.stalled` / `agent.nudged` | a session went quiet; it got its one nudge |
-| `limit.reached` | a retry, loop cap or budget ran out, or an agent worked while asking; the task is held |
+| `task.held` | something went wrong or a limit was reached; the task waits for you |
 | `task.killed` / `task.failed` | you stopped it, or you gave up on it after a limit was reached |
 
 Events are versioned from day one.
@@ -390,18 +390,20 @@ The rules the core must never break are in `docs/invariants.md`, property tested
 
 ## Keeping up with main
 
-Before review, the daemon merges main into the task branch, in the builder's worktree, after committing any uncommitted work. The resulting commit is the reviewed commit. On a conflict the merge is left unfinished for the builder to complete, so the tester always checks against current main. If git fails for another reason, such as a lock, the merge gets one retry, then the task is held. After done, the PR and CI handle drift. Skelcrew never force pushes.
+Before review, the daemon merges main into the task branch, in the builder's worktree, after committing any uncommitted work. The resulting commit is the reviewed commit. On a conflict the merge is left unfinished for the builder to complete, so the tester always checks against current main. If git fails for another reason, such as a lock, the task is held. After done, the PR and CI handle drift. Skelcrew never force pushes.
 
 ## Failure handling
 
-- **Crash** (session ends without reporting): one automatic retry with a fresh session, then held.
-- **Stall** (no new transcript line for 20 minutes, with no open question): one nudge, then held.
-- **Working while asking** (a new transcript line while a question is open): held.
-- **Loop cap** (3 build and review round trips): held, with the tester's findings.
-- **Budget** (working minutes, counted only while an agent works, and afresh after a retry): held. Placeholders until dogfooding: 30 minutes for `light`, 2 hours for `full`.
-- **Workspace or session fails to start**: one retry, then held.
+Skelcrew never retries on its own. Anything that goes wrong holds the task with what happened, and `skel retry` is one key away.
+
+- **Crash** (session ends without reporting): held, with its exit code and last line.
+- **Workspace or session fails to start**: held.
+- **Merging main fails** for any reason but a conflict: held.
 - **Work can't be saved** (the commit after a stop fails): held, and the workspace is kept.
-- **Output delivery fails**: retried with backoff; the task is done only when delivery is confirmed.
+- **Output delivery fails**: held. The task is done only when delivery is confirmed.
+- **Loop cap** (3 build and review round trips): held, with the tester's findings.
+
+Quiet agents and usage are shown, not acted on. An agent quiet for a long time, or one still working after it asked a question, shows on the screen. Tokens and working minutes show per task. A cap can come back if dogfooding shows a runaway.
 
 Every failure that reaches you says what happened in one line and offers the actions that fit.
 
@@ -410,7 +412,7 @@ Every failure that reaches you says what happened in one line and offers the act
 SQLite on the machine running the daemon.
 
 - **Stored:** the event log, the task projection derived from it, the outbox of commands not yet carried out, the starts in flight, the sessions Skelcrew started, and mappings from source IDs to workspace, session, branch and PR.
-- **Not stored:** tasks themselves (tracker or local inbox), code and specs (the repo, specs in `docs/plans`), transcripts (the harness; Skelcrew keeps a pointer, which is what makes resume work), secrets (environment or keychain).
+- **Not stored:** tasks themselves (tracker or local inbox), code and specs (the repo, specs in `docs/plans`), transcripts (the harness; Skelcrew keeps a pointer), secrets (environment or keychain).
 
 **One daemon per repository.** The daemon holds an operating system file lock (`flock`) while it runs. The lock ends with the process however it ends, so two daemons never run the same log, and no PID file is trusted.
 
@@ -419,7 +421,7 @@ SQLite on the machine running the daemon.
 1. **Rebuild** every task by replaying the log through `evolve`. An event that can't be read or doesn't fit stops the start with its position, rather than rebuilding a wrong task.
 2. **Resend** every command in the outbox that wasn't marked done, including one whose work was still going on when the daemon died. The tools treat a repeat as a no-op, and typing into a session is never repeated.
 3. **Count starts in flight** from the store, so slots stay right before any reply arrives.
-4. **Find the sessions.** The runner lists the sessions still open. A session that ended while no daemon ran is reported with its real exit code. A recorded session the runner no longer has is reported as ended (`crashed`, "Skelcrew restarted"). Both then go through normal crash handling (see Failure handling). A session the runner has but the store doesn't is stopped.
+4. **Find the sessions.** The runner lists the sessions still open. A session that ended while no daemon ran is reported with its real exit code. A recorded session the runner no longer has is reported as ended (`crashed`, "Skelcrew restarted"). Both hold their task, as a crash does. A session the runner has but the store doesn't is stopped.
 5. **Run the scheduler.**
 
 Losing the database loses control of in flight tasks and history, never work.
@@ -464,7 +466,7 @@ skel attach 142                            # enter the agent's session
 skel path 142                              # print the worktree path: lazygit -p $(skel path 142)
 skel open 142                              # shell in the worktree
 skel pause 142 / skel resume 142
-skel start 145 [--pause 142]
+skel start 145                             # start now, even past max_running
 skel kill 142
 ```
 
@@ -501,7 +503,7 @@ Entering chat mode is attaching to the task's session.
 - The task moves to with you; the loop leaves it alone.
 - Detaching does one of two things, which you choose: **resume** hands the task back to its phase, where the agent carries on; **hand over** treats the work as handed over (as if the builder ran `skel done`), so it moves to review, or to done when the intent has no review. Approval still applies.
 - The conversation is part of the task's history.
-- If the session has ended, the harness's resume reopens it with full context.
+- Once the session has ended, there is nothing to attach to. `skel open` gives you a shell in the workspace.
 
 ### Inspecting work
 
@@ -547,13 +549,12 @@ limits:
 
 Start over rather than rewriting v3, but carry its lessons.
 
-1. **Test the unknowns first.** v3 never built resume, the tester, or stall detection, so nothing has tested them. Before building on them, check with throwaway scripts that a resumed harness session keeps its permissions and takes a typed message, that `done` can wait as long as a tester agent runs, and that the transcript tells a working agent from a stalled one. The answers can change the core's events and steps.
-2. **Core, attended.** Types, events and invariants approved first, then the reducer with a test per transition, property tests, and a simulator that runs whole lifecycles with scripted replies.
-3. **Smallest real loop.** `skel add` → planner → builder in a worktree with tmux → tester in its own worktree → a branch.
-4. **Dogfood.** The MVP builds the rest of Skelcrew. v3 is frozen.
-5. **Right after the MVP:** GitHub, the TUI, herdr, notifications.
+1. **Core, attended.** Types, events and invariants approved first, then the reducer with a test per transition, property tests, and a simulator that runs whole lifecycles with scripted replies.
+2. **Smallest real loop.** `skel add` → planner → builder in a worktree with tmux → tester in its own worktree → a branch.
+3. **Dogfood.** The MVP builds the rest of Skelcrew. v3 is frozen.
+4. **Right after the MVP:** GitHub, the TUI, herdr, notifications.
 
-Track from step 4: questions per task, minutes spent on decisions, tester catch rate, tasks reaching done without you, cost per task.
+Track from step 3: questions per task, minutes spent on decisions, tester catch rate, tasks reaching done without you, cost per task.
 
 ## Later
 
@@ -574,5 +575,4 @@ Track from step 4: questions per task, minutes spent on decisions, tester catch 
 - The plugin interface: process per plugin or in process modules, and how third party plugins are trusted.
 - Current plugin surfaces of herdr and other tools need checking before committing.
 - The file formats for the brief, summary, report, evidence, findings and proposed tasks (`tasks.md`).
-- Resuming a harness session (`claude --resume`) is untested: v3 always started fresh. Does a resumed session keep its permissions and pick up a message typed in straight away?
 - Should a change to tests or check config count as critical, so it always needs your approval?

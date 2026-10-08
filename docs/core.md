@@ -1,10 +1,8 @@
 # Core model
 
-**Status: approved, except Handover, which is open.** This is the core from `docs/spec.md`,
-worked out in enough detail to write tests against. It holds no code. The rules it must never
-break are in `docs/invariants.md`.
-
-Items marked **Open** wait on the spike in build plan step 1.
+**Status: approved.** This is the core from `docs/spec.md`, worked out in enough detail to
+write tests against. It holds no code. The rules it must never break are in
+`docs/invariants.md`.
 
 ## A task
 
@@ -16,8 +14,8 @@ On top of the phase, a task can have:
 
 - **an open question**: an agent asked, and waits for your answer
 - **a hold**: its agent is stopped, and it won't start again until you act. The hold says
-  why: you paused it, a limit was reached, the agent gave up, a workspace or session failed
-  to start, or its work couldn't be saved.
+  why: you paused it, the agent crashed or gave up, the loop cap was reached, or a command
+  failed. Skelcrew never retries on its own.
 - **you attached**: you are in its session
 
 None of these changes the phase. When the question is answered or the hold is lifted, the
@@ -89,14 +87,14 @@ The planner can also **ask**. That doesn't end triage.
 4. **running** (session): the builder works.
 5. **handed over**: the builder ran `skel done`. The daemon attaches what the branch holds:
    its head commit, and every file the branch changed since it left main. The builder never
-   supplies these. What happens to the builder's session is **Open**, see Handover below.
+   supplies these. The builder is stopped. If review asks for changes, a fresh builder
+   starts with the findings.
 6. **merging main** (request): only for `ship` and `try`. The reply is one of:
    - **merged**: with the resulting commit and the task's changed files. That commit is the
      **reviewed commit**.
    - **conflict**: the merge is left unfinished, and the builder gets it back. That counts as
      a loop.
-   - **failed**: git failed for another reason, such as a lock. One retry, then the task is
-     held.
+   - **failed**: git failed for another reason, such as a lock. The task is held.
 
 For `answer`, which merges nothing, the reviewed commit is the handed-over one.
 
@@ -118,8 +116,8 @@ The verdict:
 - **pass**: the tester is stopped and its copy removed. Then approval if the task needs it,
   otherwise delivery.
 - **changes**: the tester is stopped and its copy removed. The loop count goes up. Under the
-  cap, the findings go to the builder and the task is back in build. At the cap, the task is
-  held with the findings.
+  cap, the task is back in build, and a fresh builder starts with the findings once the
+  tester's stop is confirmed. At the cap, the task is held with the findings.
 
 ### Approval and delivery
 
@@ -131,8 +129,8 @@ These are the last steps of whichever phase ran last: review, or build for `try`
   `skel approve` moves on to delivery. `skel deny 142 "why"` sends the task back to build
   with your note. A denial doesn't count as a loop, since it isn't a failure.
 - **delivering** (request): the output plugin hands over exactly the reviewed commit, as a
-  branch, a PR or a report. Anything committed after it stays out. A failed delivery is
-  tried again with backoff. The task ends as done only when delivery is confirmed.
+  branch, a PR or a report. Anything committed after it stays out. A failed delivery holds
+  the task. The task ends as done only when delivery is confirmed.
 
 ### Stopping an agent
 
@@ -149,49 +147,36 @@ its workspace is never removed.
 
 ### Handover
 
-**Open.** This waits on the spike. There are two ways it can go.
-
-- **A. The builder waits.** `skel done` blocks until the verdict. The builder's session stays
-  open but idle. The tester works on the task's one slot. Changes are returned by `done` in
-  the builder's own session. This is what v3 meant to do. It needs a tool call that can
-  block for as long as a tester runs.
-- **B. The builder stops.** `skel done` returns at once, and the builder's session is
-  stopped. Changes go to the builder by resuming its session with the findings typed in, or
-  by a fresh builder session given the findings. This needs resume to work, or accepts a
-  fresh start.
-
-Either way, the task has at most one agent at work at a time. Under A, an idle builder
-waiting on `done` doesn't count as at work.
+`skel done` answers at once, and the builder is stopped. The task keeps its slot for the
+tester. If review asks for changes, a fresh builder starts with the findings. Claude Code
+moves a shell command to the background after 2 minutes, so a `done` that waited for the
+verdict would quietly stop waiting.
 
 ### Questions
 
 - **Asking.** The agent runs `skel ask` and ends its turn. The question opens, and the task
   gives up its slot.
-- **Checking it stopped.** Ending the turn is the agent's to do, so Skelcrew checks. A new
-  line in the session's transcript while the question is open holds the task.
 - **Answering.** Your answer is kept until a slot is free, then typed into the session.
-- **Losing the agent.** If the session ends, the question goes with it. A retried session
-  may ask again.
+- **Losing the agent.** If the session ends, the question goes with it. A fresh session may
+  ask again.
 
 ### Changing intent, rigor or approval
 
-`skel set` overrules the planner's call. Each field takes effect in its own way:
+`skel set` overrules the planner's call. It is never refused for timing: while a workspace
+or session is starting, or main is merging, it waits until the step settles, then applies.
 
-- **Approval applies at once**, except while the task is delivering, when it is refused.
-  Setting it stops a task before delivery. Clearing it on a task awaiting approval sends it
-  on to delivery, unless its changed files still touch a critical path.
+- **Approval applies at once.** Setting it stops a task before delivery. Clearing it on a
+  task awaiting approval sends it on to delivery, unless its changed files still touch a
+  critical path.
 - **Rigor applies from the next phase.** A running build or review carries on. The next
   review uses the new depth. A change to `full` mid-build adds no spec.
 - **Intent restarts build.** The builder is stopped and a fresh session starts, on the same
-  branch and in the same workspace. A fresh session is needed because the permissions
-  change. Commits already on the branch stay, and the loop count is kept. A change to
-  `answer` is refused once the branch holds commits, since an `answer` must not hand over
-  code. Kill the task and add it again instead.
+  branch and in the same workspace, since the permissions change. Commits already on the
+  branch stay, and the loop count is kept. After a change to `answer`, the code stays on the
+  branch, and only the report is handed over.
 - **During triage, intent and rigor together end triage**, as `skel add --ship --light`
   skips it. The planner is stopped and build starts. Either one alone wins over what the
   planner proposes for that field.
-- **While a request is in flight**, such as a session starting or main merging, only
-  approval can change. Anything else is refused until the step settles.
 
 ## Slots
 
@@ -199,11 +184,10 @@ waiting on `done` doesn't count as at work.
   you, is held, or ends. So work already under way finishes before new work starts.
 - **An attached task keeps its slot**, since its agent keeps working with you.
 - **Starts and stops in flight hold a slot**, as the spec says.
-- **The scheduler's order:** a task you started now, then answers to questions, then resumed
-  tasks, then queued tasks. Oldest first within each.
-- **Start now with a swap.** `skel start 145 --pause 142` pauses #142, and puts #145 first in
-  line. #145 starts once #142's stop is confirmed, so running agents never exceed
-  `max_running`, and no other task can take the slot in between.
+- **The scheduler's order:** answers to questions, then resumed tasks, then queued tasks.
+  Oldest first within each.
+- **You can go past `max_running`.** `skel start 145` starts at once, even when every slot
+  is taken. The limit binds only what Skelcrew starts on its own.
 
 ## Inputs
 
@@ -221,8 +205,8 @@ caller.
 | approve proposals / deny proposals | on tasks proposed by a split or an answer, after the task has ended |
 | attach / detach | steps into the session, and back out with resume or hand over |
 | pause / resume | holds the task, or lifts your pause |
-| start | starts the task now, optionally pausing another |
-| retry | lifts a hold from a limit, a give-up, a failed start or a failed save. The budget counts afresh from here. |
+| start | starts the task now, even past `max_running` |
+| retry | lifts a hold, whatever its reason |
 | kill | ends the task |
 
 A reply on the tracker, through an input plugin, counts as yours only when it comes from an
@@ -254,11 +238,10 @@ for its own role.
 - **start**: the scheduler picked the task for a free slot.
 - **deliver answer**: the scheduler found a slot for a kept answer.
 - **usage**: each session's running totals, read from its transcript. The task's usage is
-  the sum, and is checked against the budget.
-- **stalled**: the session's transcript has had no new line for 20 minutes, with no open
-  question. The first time sends a nudge. The second time holds the task.
-- **active while asking**: the session's transcript grew while its question is open. Holds
-  the task.
+  the sum. It is shown, never enforced.
+
+How long an agent has been quiet is read from its transcript and shown on the screen. It is
+not an input, since nothing in the core acts on it.
 
 ## Commands
 
@@ -269,20 +252,19 @@ a reply has a success reply and a failure reply.
 |---|---|
 | create workspace (the task's, or the tester's copy at a commit) | created, failed |
 | remove workspace | none |
-| start session (role, workspace, brief, findings or answer to pass on, resume or fresh) | started, failed, and later ended |
+| start session (role, workspace, brief, findings or answer to pass on) | started, failed, and later ended |
 | stop session (save work or not) | stopped: saved, nothing to save, or save failed |
 | type into session | none |
 | merge main | merged with the commit and changed files, conflict, failed |
 | deliver output (the reviewed commit, or the report) | delivered, failed |
 
-**Retries.** A failed workspace or session start gets one retry. A failed merge of main gets
-one retry. A failed delivery is retried with backoff. Retries are counted on the step, and
-start again from zero when the step changes.
+**No retries.** A failure reply holds the task with what happened. You retry it with
+`skel retry`.
 
 **Repeats after a crash.** The outbox may send a command twice, and each tool treats a repeat
 as doing nothing. Typing into a session is the exception. It is recorded as sent before it
 is typed, so a crash in between loses the message rather than typing it twice. A lost
-message shows up as a stall, and the nudge repeats it.
+message shows as an idle agent, and you can reply again.
 
 Output plugins that only mirror state, such as an issue comment or a notification, listen to
 events. They never block a task, and the core sends them no command.

@@ -6,6 +6,38 @@ doesn't pay for them twice.
 
 Paths below are in the v3 repository.
 
+## Product lessons
+
+- **Not every task needs every phase.** v3 ran every task through spec, build, checks and
+  review. That was its main complaint. v4 answers it with intent and rigor.
+- **Rigidity gets routed around.** In v3 you couldn't pause or start tasks, had to wait for
+  slots, and couldn't move work around. Small fixes ended up done outside Skelcrew, where it
+  guards nothing. v4 lets you start past `max_running`, pause, resume and overrule triage.
+- **Keep it as simple as possible.** Every edge case found in review tends to become a rule,
+  a state or a refusal. Cut or simplify first. Show you something rather than automate it.
+  Wait or let you override rather than refuse.
+
+## What the v4 spike found
+
+A spike before the core, run against Claude Code 2.1.294 in tmux:
+
+- **`claude --resume` drops the allow list.** It restores the conversation and `dontAsk`
+  mode, but not `--settings`, so the agent is refused everything not auto-allowed. Text
+  typed in its first 0.8 seconds is also lost. v4 starts every session fresh instead.
+- **A shell command can't block for long.** After 2 minutes Claude Code moves a command to
+  the background and ends the turn, unless the undocumented `BASH_DEFAULT_TIMEOUT_MS` and
+  `BASH_MAX_TIMEOUT_MS` are raised. So `skel done` answers at once.
+- **The transcript tells a running command from an idle agent.** During a command, the last
+  line is an assistant line whose `stop_reason` is `tool_use`, with no result yet, and
+  nothing is written until it ends. When the turn ends, the last line is a `turn_duration`
+  system line. A command moved to the background looks idle.
+- **Never send `ctrl+b`.** Pressed twice, it moves Claude Code's running command to the
+  background, and it is also tmux's prefix key.
+- **Subfolders inherit folder trust**, so a worktree inside a trusted repository needs no
+  prompt.
+- **Claude Code outlives `tmux kill-server` by a few seconds.** Wait for its processes to
+  exit.
+
 ## Code worth reusing
 
 Each of these was hardened by real bugs. Read it before writing v4's version, and copy it
@@ -62,13 +94,71 @@ Each of these cost v3 at least one bug.
   separate process can stop it.
 - **macOS limits a socket path to 103 bytes.** A deep repository needs its socket elsewhere.
 
+## Core lessons
+
+v3's core (`src/core/`) is the decider pattern done carefully. Most of these were found by
+its property tests or by Codex review, and each was a real bug.
+
+**Shape**
+
+- **`decide` reads as an outline.** Create, then refuse a missing task, then clean up late
+  replies, then refuse an ended task, then refuse the wrong sender, then inputs that work in
+  any phase, then one function per phase. `evolve` has the same shape.
+- **Read a task through one module** (`task.ts`): which session is running, which request
+  the step waits on, what it waits on you for. Each question has one answer, shared by
+  decide, the scheduler and the tests.
+- **Helpers named for a problem return the reason or null**, such as `senderMismatch`.
+  Rejections are written in plain words, with phase and input names as you would say them.
+
+**Bugs worth not repeating**
+
+- **Build every phase change from the base fields.** Moving phase by spreading the old task
+  carried old fields into the new phase. TypeScript can't catch it, since spreads skip its
+  check for extra fields. The property test checks that a task carries exactly its phase's
+  fields.
+- **An event that sends a request carries its number.** `evolve` records the number from
+  the event, never works it out, and `decide` picks it in one place. When the two counted
+  separately, replies could stop matching.
+- **Clean up only what the task doesn't hold.** A repeated reply for the session or
+  workspace the task already holds is ignored. Cleaning it up stopped the working agent and
+  removed its worktree.
+- **A crash can arrive before the start reply.** The end report names the request that
+  started the session. If the task still waits on that request, it counts as a failed
+  start, and the late start reply is cleaned up.
+- **A verdict belongs to its round.** A review result from an earlier round once passed the
+  current one, so new code shipped without its own review. Every result must answer the
+  current request.
+- **Pin the exact commit.** A repeated done report once replaced a newer one, and a
+  critical file merged without approval. The commit, and the files it changed, are fixed
+  when the work is handed over, and everything after uses them.
+- **A question goes when its agent goes.** A question once outlived its agent, and every
+  answer was refused. An agent also can't hand over while its own question is open.
+- **Check the budget on every usage report and before every start.** A report that arrived
+  while an agent was starting was only recorded, and the task ran past its cap.
+- **Count starts in flight outside the task.** A task dropped while its agent was starting
+  freed its slot at once. The loop counts starts, since a task can't keep a marker once it
+  has ended.
+- **`evolve` refuses an event that doesn't fit**, naming it, so a damaged log stops replay
+  instead of rebuilding a wrong task.
+
+**Testing**
+
+- **Guided random inputs.** Most steps pick an input the task accepts right now, so random
+  runs reach every phase. Inputs that move a task backwards come only from unguided picks,
+  or they crowd out progress.
+- **Replies are built from the requests actually sent**, old ones included, so late and
+  repeated replies are tested all the time.
+- **Check both directions.** Every live agent and workspace is held by its task, and
+  everything a task holds is really live. v3's first property test checked only one
+  direction, and repeated replies slipped through.
+- **Golden stories**: whole lifecycles as input sequences, with their events saved as
+  snapshots, so any change to the event log shows up in review.
+
 ## What v3 never built
 
-These are the riskiest parts of v4, since nothing in v3 tested them:
-
-- the reviewer, and `done` waiting for a verdict from an agent that may run a long time
-- stall detection
-- resuming a harness session (`claude --resume`)
+The reviewer, stall detection and resuming a harness session. The spike above tested the
+last two and a long-blocking `done`, and v4 now avoids all three. The tester is still new in
+v4, with nothing from v3 to lean on.
 
 ## Where v3's complexity went
 

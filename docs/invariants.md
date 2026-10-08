@@ -18,8 +18,8 @@ The terms come from `docs/core.md`.
    agent is heard.
 2. **Nothing ships unchecked.** What Skelcrew hands over is exactly the commit that passed
    review, and flagged or critical work waits for your sign-off.
-3. **Agents stay within limits.** Never more than `max_running` at work, and a held task
-   stays stopped until you act.
+3. **Agents stay within limits.** Skelcrew never puts more than `max_running` to work on its
+   own, and a held task stays stopped until you act.
 4. **Nothing is lost.** Work is saved before an agent is let go, and every workspace, session
    and command is accounted for.
 5. **What you see is true.** Endings are final, crashes are noticed, and usage only grows.
@@ -67,45 +67,44 @@ property test that owns it:
 
 ## 3. Agents stay within limits
 
-10. **Never more than `max_running` agents at work.** Starts and stops in flight count, and so
-    does an attached session, since its agent keeps working with you. A task waiting on you
-    or held counts for none. A task has at most one agent at work and one slot, and the next
+10. **Skelcrew never puts more than `max_running` agents to work on its own.** Starts and stops
+    in flight count, and so does an attached session, since its agent keeps working with you.
+    A task waiting on you or held counts for none. Only your `skel start` can go past the
+    limit. A task has at most one agent at work and one slot, and the next
     agent on a task starts only after the last one's stop is confirmed. _(core, loop)_
 11. **A held task has no agent at work, and never starts again without you.** _(core)_
-12. **Every limit holds the task.** A second crash, a second stall, the loop cap, the budget,
-    and an agent at work while its question is open each hold the task with what happened.
-    None is passed silently. _(core)_
-13. **The budget counts from the last retry.** A retried task gets a fresh allowance. The
-    usage on record never resets. _(core)_
-14. **At most one open question per task.** _(core)_
+12. **Every failure holds the task.** A crash, a failed command and the loop cap each hold the
+    task with what happened. Nothing is retried on its own, and nothing is passed silently.
+    _(core)_
+13. **At most one open question per task.** _(core)_
 
 ## 4. Nothing is lost
 
-15. **No workspace or session is left untracked.** Every one the core asked for is either
+14. **No workspace or session is left untracked.** Every one the core asked for is either
     held on its task or has been sent a command to remove or stop it. _(core)_
-16. **Work is saved before it is let go.** The agent is stopped first, then any uncommitted
+15. **Work is saved before it is let go.** The agent is stopped first, then any uncommitted
     work is committed. If that commit fails, the task is held and its workspace is never
     removed. The tester's copy holds nothing to save, and is thrown away. _(core)_
-17. **Every saved command is carried out once the daemon runs.** A repeat after a crash has
+16. **Every saved command is carried out once the daemon runs.** A repeat after a crash has
     the effect of once. The one exception is typing into a session, which happens at most
-    once. A lost message shows up as a stall. _(loop)_
-18. **A failed save changes nothing.** No state changes, and no command goes out. _(loop)_
+    once. A lost message shows as an idle agent. _(loop)_
+17. **A failed save changes nothing.** No state changes, and no command goes out. _(loop)_
 
 ## 5. What you see is true
 
-19. **Nothing leaves an ending.** An ended task accepts only the cleanup of a late session or
+18. **Nothing leaves an ending.** An ended task accepts only the cleanup of a late session or
     workspace, a late usage report, and your decision on its proposals. _(core)_
-20. **A session that ends without reporting never goes unnoticed.** It is retried once with a
-    fresh session, then the task is held. _(core)_
-21. **No question outlives its agent.** A question exists only while the session that asked it
+19. **A session that ends without reporting never goes unnoticed.** It holds the task with its
+    exit code and last line. _(core)_
+20. **No question outlives its agent.** A question exists only while the session that asked it
     is the task's agent. _(core)_
-22. **Usage never goes down.** Each session's totals only grow, and a task's usage is the sum
+21. **Usage never goes down.** Each session's totals only grow, and a task's usage is the sum
     of its sessions. A report lower than that session's last is older, and is refused.
     _(core)_
 
 ## 6. The log replays exactly
 
-23. **Replaying the log rebuilds every task exactly.** Folding a task's events through
+22. **Replaying the log rebuilds every task exactly.** Folding a task's events through
     `evolve` from nothing gives the task the core had before. After a restart, the loop's
     tasks match a fresh replay of the saved log. _(core, loop)_
 
