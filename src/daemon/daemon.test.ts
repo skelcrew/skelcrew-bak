@@ -85,6 +85,20 @@ describe("the daemon", () => {
     expect(!answer.ok && answer.message).toContain("#7");
   });
 
+  test("stops even while a client holds a connection open", async () => {
+    const served = await serve(folder(), { socketFolder: join(folder(), "sockets") });
+    if (!served.ok) throw new Error(served.message);
+    const idle = connect(served.daemon.socket);
+    await new Promise((resolve) => idle.once("connect", resolve));
+
+    const stopped = await Promise.race([
+      served.daemon.stop().then(() => "stopped"),
+      Bun.sleep(1_000).then(() => "still stopping"),
+    ]);
+    expect(stopped).toBe("stopped");
+    idle.destroy();
+  });
+
   test("keeps its tasks across a restart", async () => {
     const repo = folder();
     const first = await started(repo);

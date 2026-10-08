@@ -4,14 +4,19 @@
 // daemon handles one at a time.
 
 import { chmodSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { encode, MAX_LINE, VERSION } from "../protocol/protocol";
 
 export type Listening = { stop(): Promise<void> };
 
 // `answer` turns one line into the line to send back.
 export function listen(socket: string, answer: (line: string) => string): Promise<Listening> {
+  // Every open connection, so stopping can close them. An idle one would
+  // otherwise keep the daemon, and the repository's lock, forever.
+  const open = new Set<Socket>();
   const server = createServer((connection) => {
+    open.add(connection);
+    connection.on("close", () => open.delete(connection));
     // Decoded as one stream, so a character split between packets stays whole.
     connection.setEncoding("utf8");
     let text = "";
@@ -39,7 +44,11 @@ export function listen(socket: string, answer: (line: string) => string): Promis
       // Only this user may talk to the daemon.
       chmodSync(socket, 0o600);
       resolve({
-        stop: () => new Promise((done) => server.close(() => done())),
+        stop: () =>
+          new Promise((done) => {
+            server.close(() => done());
+            for (const connection of open) connection.destroy();
+          }),
       });
     });
   });
