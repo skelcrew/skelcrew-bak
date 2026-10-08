@@ -2,7 +2,8 @@
 // already accepted, so it makes no decisions of its own. Replaying a task's
 // events through it, starting from null, rebuilds the task exactly.
 //
-// Events that apply in any phase come first, then one function per phase.
+// Events that apply in any phase come first, then those that apply in any
+// phase before the end, then one function per phase.
 // It does check that each event fits the task, such as a hold on a task that
 // isn't held, and refuses one that doesn't with the reason. decide never
 // produces such an event, so a refusal means decide and evolve disagree, or
@@ -166,6 +167,29 @@ export const evolve: Evolve = (task, event) => {
       return ok({ ...task, kept: null });
   }
 
+  if (task.phase === "ended") return refuse(event, `#${task.id} can't take it in ended`);
+
+  // Making a workspace and starting an agent work alike in every other phase.
+  // In review, the workspace is the tester's copy.
+  switch (event.type) {
+    case "workspace.requested": {
+      const { request } = event;
+      if (task.phase === "review") {
+        return ok(withRequest(task, request, { kind: "creating_copy", request }));
+      }
+      return ok(withRequest(task, request, { kind: "creating_workspace", request }));
+    }
+
+    case "session.requested":
+      return ok(withRequest(task, event.request, { kind: "starting", request: event.request }));
+
+    case "session.started":
+      if (task.step.kind !== "starting") {
+        return refuse(event, `#${task.id} isn't starting a session`);
+      }
+      return ok({ ...task, step: { kind: "running", session: event.session } });
+  }
+
   switch (task.phase) {
     case "triage":
       return inTriage(task, event);
@@ -173,8 +197,6 @@ export const evolve: Evolve = (task, event) => {
       return inBuild(task, event);
     case "review":
       return inReview(task, event);
-    default:
-      return refuse(event, `#${task.id} can't take it in ${task.phase}`);
   }
 };
 
@@ -224,22 +246,8 @@ function received(event: Extract<TaskEvent, { type: "task.received" }>): Task {
 
 function inTriage(task: TaskIn<"triage">, event: TaskEvent): Evolved {
   switch (event.type) {
-    case "workspace.requested":
-      return ok(
-        withRequest(task, event.request, { kind: "creating_workspace", request: event.request }),
-      );
-
     case "workspace.created":
       return ok({ ...task, workspace: event.workspace });
-
-    case "session.requested":
-      return ok(withRequest(task, event.request, { kind: "starting", request: event.request }));
-
-    case "session.started":
-      if (task.step.kind !== "starting") {
-        return refuse(event, `#${task.id} isn't starting a session`);
-      }
-      return ok({ ...task, step: { kind: "running", session: event.session } });
 
     // Without a spec, the task moves to build and waits for the planner's
     // stop. With one, it stays until the spec is committed.
@@ -285,22 +293,8 @@ function inTriage(task: TaskIn<"triage">, event: TaskEvent): Evolved {
 
 function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
   switch (event.type) {
-    case "workspace.requested":
-      return ok(
-        withRequest(task, event.request, { kind: "creating_workspace", request: event.request }),
-      );
-
     case "workspace.created":
       return ok({ ...task, workspace: event.workspace });
-
-    case "session.requested":
-      return ok(withRequest(task, event.request, { kind: "starting", request: event.request }));
-
-    case "session.started":
-      if (task.step.kind !== "starting") {
-        return refuse(event, `#${task.id} isn't starting a session`);
-      }
-      return ok({ ...task, step: { kind: "running", session: event.session } });
 
     // The builder's work is kept until delivery. The feedback it started
     // with has been dealt with.
@@ -344,22 +338,8 @@ function inBuild(task: TaskIn<"build">, event: TaskEvent): Evolved {
 
 function inReview(task: TaskIn<"review">, event: TaskEvent): Evolved {
   switch (event.type) {
-    case "workspace.requested":
-      return ok(
-        withRequest(task, event.request, { kind: "creating_copy", request: event.request }),
-      );
-
     case "copy.created":
       return ok({ ...task, copy: event.copy });
-
-    case "session.requested":
-      return ok(withRequest(task, event.request, { kind: "starting", request: event.request }));
-
-    case "session.started":
-      if (task.step.kind !== "starting") {
-        return refuse(event, `#${task.id} isn't starting a session`);
-      }
-      return ok({ ...task, step: { kind: "running", session: event.session } });
 
     // The copy goes with the tester's stop, so it is no longer the task's.
     case "review.passed":
