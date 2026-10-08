@@ -17,7 +17,7 @@ import { decide } from "./decide";
 import { evolve } from "./evolve";
 import { CommitSha, SessionId, TaskId } from "./ids";
 import { schedule, slotsInUse } from "./schedule";
-import { runningSession } from "./task";
+import { holdsWorkspace, runningSession } from "./task";
 import type {
   BranchFacts,
   Command,
@@ -654,7 +654,7 @@ function checkTask(world: World, task: Task): void {
   const removing = new Set([...world.stops.values()].map((stop) => stop.removes));
   const stopping = new Set([...world.stops.values()].map((stop) => stop.session));
   for (const path of world.liveWorkspaces) {
-    expect(holdsPath(task, path) || removing.has(path)).toBe(true);
+    expect(holdsWorkspace(task, path) || removing.has(path)).toBe(true);
   }
   for (const session of world.liveSessions) {
     expect(runningSession(task) === session || stopping.has(session)).toBe(true);
@@ -681,17 +681,6 @@ function heldPaths(task: Task): string[] {
       return [task.workspace.path, ...(task.copy === null ? [] : [task.copy.path])];
     default:
       return task.workspace === null ? [] : [task.workspace.path];
-  }
-}
-
-function holdsPath(task: Task, path: string): boolean {
-  switch (task.phase) {
-    case "ended":
-      return task.kept?.path === path;
-    case "review":
-      return task.workspace.path === path || task.copy?.path === path;
-    default:
-      return task.workspace?.path === path;
   }
 }
 
