@@ -31,7 +31,8 @@ const migrations = [
 
 export type Saved = { ok: true } | { ok: false; reason: string };
 
-// A saved decision, with the id of each of its commands, in order.
+// A saved decision, with the id of each of its commands, in order. There is
+// always one id per command.
 export type Queued = { ok: true; ids: number[] } | { ok: false; reason: string };
 
 export type SavedCommand = { id: number; command: Command };

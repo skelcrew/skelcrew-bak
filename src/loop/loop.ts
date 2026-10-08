@@ -51,10 +51,9 @@ export interface ReadableLog extends Log {
 
 export class Loop {
   private readonly tasks: Map<TaskId, Task>;
-  // Commands handed to the tools whose work hasn't finished, by a key of our
-  // own, since a command without a log has no id.
+  // Commands handed to the tools whose work hasn't finished, by their id in
+  // the outbox.
   private readonly pending = new Map<number, Command>();
-  private nextKey = 1;
   // Set while an input is handled, so a tool replying from inside carryOut
   // is caught.
   private busy = false;
@@ -153,45 +152,45 @@ export class Loop {
     }
 
     for (const event of decision.events) this.apply(event);
-    this.dispatch(decision.commands.map((command, i) => ({ command, id: saved.ids[i] })));
+    this.dispatch(
+      decision.commands.map((command, i) => {
+        const id = saved.ids[i];
+        if (id === undefined) throw new Error("The log saved a command without giving its id.");
+        return { command, id };
+      }),
+    );
     return { decision, saved: true };
   }
 
   // Hands commands to the tools. Every one is counted as pending before the
   // first goes out, so the count of slots in flight is whole while they do.
-  private dispatch(commands: { command: Command; id: number | undefined }[]): void {
-    const keyed = commands.map((entry) => ({ ...entry, key: this.track(entry.command) }));
+  private dispatch(commands: { command: Command; id: number }[]): void {
+    for (const { command, id } of commands) this.pending.set(id, command);
     this.busy = true;
     try {
-      for (const { command, id, key } of keyed) this.carryOut(command, id, key);
+      for (const { command, id } of commands) this.carryOut(command, id);
     } finally {
       this.busy = false;
     }
-  }
-
-  private track(command: Command): number {
-    const key = this.nextKey++;
-    this.pending.set(key, command);
-    return key;
   }
 
   // Hands one command to the tools. It stays pending, and in the outbox,
   // until its tool says it has finished. Typing into a session is the
   // exception: it leaves the outbox before it is typed, so a crash in between
   // loses the message rather than typing it twice.
-  private carryOut(command: Command, id: number | undefined, key: number): void {
+  private carryOut(command: Command, id: number): void {
     if (command.type === "type_into_session") {
-      this.pending.delete(key);
+      this.pending.delete(id);
       // If it can't leave the outbox, it isn't typed: a restart would type
       // it again. The message is lost instead, as the spec allows.
-      if (id !== undefined && !this.log.carriedOut(id).ok) return;
+      if (!this.log.carriedOut(id).ok) return;
       this.tools.carryOut(command, () => true);
       return;
     }
     this.tools.carryOut(command, (input) => {
-      if (!this.pending.has(key)) return true; // answered already
+      if (!this.pending.has(id)) return true; // answered already
       const answered = this.answer(command, input, id);
-      if (answered) this.pending.delete(key);
+      if (answered) this.pending.delete(id);
       return answered;
     });
   }
@@ -199,14 +198,11 @@ export class Loop {
   // A tool's reply to a command: saved with the command leaving the outbox,
   // or for a reply the core refuses, the command just leaves. False when a
   // save failed, so the tool replies again later.
-  private answer(command: Command, input: Input | null, id: number | undefined): boolean {
-    const done = id === undefined ? [] : [id];
-    if (input === null || !("taskId" in command)) {
-      return id === undefined || this.log.carriedOut(id).ok;
-    }
-    const handled = this.handle(command.taskId, input, this.now(), done);
+  private answer(command: Command, input: Input | null, id: number): boolean {
+    if (input === null || !("taskId" in command)) return this.log.carriedOut(id).ok;
+    const handled = this.handle(command.taskId, input, this.now(), [id]);
     if (!handled.saved) return false;
-    if (!handled.decision.ok && id !== undefined) return this.log.carriedOut(id).ok;
+    if (!handled.decision.ok) return this.log.carriedOut(id).ok;
     return true;
   }
 
