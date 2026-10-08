@@ -119,10 +119,11 @@ export type BuildStep =
   | { kind: "starting"; request: number }
   | { kind: "running"; session: SessionId }
   // The builder has been stopped. A fresh one starts if review asks for changes.
-  | { kind: "merging_main"; request: number; handedOver: BranchFacts }
+  | { kind: "merging_main"; request: number }
   | Finishing; // only for `try`, which skips review
 
 export type ReviewStep =
+  | { kind: "queued" } // after a hold
   | { kind: "creating_copy"; request: number }
   | { kind: "starting"; request: number }
   | { kind: "running"; session: SessionId }
@@ -183,9 +184,10 @@ export type PhaseState =
 // What the builder handed over: a summary of the change, or for `answer` a
 // report and any tasks it proposes. Kept until delivery, so a restart loses
 // nothing.
-export type Handover =
+export type Handover = { branch: BranchFacts } & (
   | { kind: "summary"; text: string }
-  | { kind: "report"; text: string; proposals: { title: string; description: string }[] };
+  | { kind: "report"; text: string; proposals: { title: string; description: string }[] }
+);
 
 export type Outcome =
   | { kind: "done"; delivered: Delivered }
@@ -371,7 +373,8 @@ export type EventBody =
     }
   | { type: "task.triaged"; outcome: "decline"; reason: string }
   | { type: "task.set"; intent: Intent | null; rigor: Rigor | null; approve: boolean | null }
-  | { type: "phase.started"; phase: "triage" | "build" | "review" }
+  // An `answer` merges nothing, so its handed-over commit goes to review as is.
+  | { type: "review.ready"; reviewed: Reviewed }
   | { type: "workspace.requested"; request: number; tester: boolean }
   | { type: "workspace.created"; workspace: Workspace }
   | { type: "copy.created"; copy: TesterCopy }
@@ -399,7 +402,7 @@ export type EventBody =
   | { type: "task.held"; hold: Hold }
   | { type: "task.released" } // your resume or retry lifts the hold
   | { type: "task.started_now" }
-  | { type: "build.done"; branch: BranchFacts; handover: Handover }
+  | { type: "build.done"; handover: Handover }
   | { type: "spec.requested"; request: number; text: string }
   | { type: "spec.committed"; path: string }
   | { type: "main.requested"; request: number }

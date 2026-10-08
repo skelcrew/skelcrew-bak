@@ -3,18 +3,22 @@
 // or rejects it with a reason. It reads nothing else and changes nothing.
 //
 // `decide` below is the outline: each step is one line, in the order the
-// rules apply. The steps follow it.
+// rules apply. The steps follow it, then one function per phase, then the
+// helpers that make workspaces and start and stop agents.
 
 import { runningSession, type TaskIn, waitingForSession } from "./task";
 import type {
   Command,
+  Config,
   Decide,
   Decision,
   Envelope,
   EventBody,
+  Feedback,
   Hold,
   Input,
   Plan,
+  Reviewed,
   SessionContext,
   SessionId,
   Task,
@@ -27,10 +31,11 @@ type Context = {
   accept: (bodies: EventBody[], commands?: Command[]) => Decision;
   reject: (reason: string) => Decision;
   at: Timestamp;
+  config: Config;
 };
 
-export const decide: Decide = (task, envelope) => {
-  const ctx = makeContext(envelope);
+export const decide: Decide = (task, envelope, config) => {
+  const ctx = makeContext(envelope, config);
   const { input } = envelope;
 
   if (input.type === "add") return create(task, input, ctx);
@@ -44,6 +49,8 @@ export const decide: Decide = (task, envelope) => {
   switch (task.phase) {
     case "triage":
       return inTriage(task, input, ctx);
+    case "build":
+      return inBuild(task, input, ctx);
     case "ended":
       return ctx.reject(`#${task.id} has ended.`);
     default:
@@ -51,7 +58,7 @@ export const decide: Decide = (task, envelope) => {
   }
 };
 
-function makeContext({ taskId, at, input }: Envelope): Context {
+function makeContext({ taskId, at, input }: Envelope, config: Config): Context {
   return {
     accept: (bodies, commands = []) => ({
       ok: true,
@@ -60,6 +67,7 @@ function makeContext({ taskId, at, input }: Envelope): Context {
     }),
     reject: (reason) => ({ ok: false, rejection: { input: input.type, reason } }),
     at,
+    config,
   };
 }
 
@@ -88,7 +96,16 @@ function create(task: Task | null, input: Input & { type: "add" }, ctx: Context)
 }
 
 // Inputs whose rules don't depend on the phase.
-const anyPhaseInputs = ["session_ended", "stopped", "ask", "reply", "deliver_answer"] as const;
+const anyPhaseInputs = [
+  "workspace_failed",
+  "session_started",
+  "session_failed",
+  "session_ended",
+  "stopped",
+  "ask",
+  "reply",
+  "deliver_answer",
+] as const;
 type AnyPhaseInput = Extract<Input, { type: (typeof anyPhaseInputs)[number] }>;
 
 function worksInAnyPhase(input: Input): input is AnyPhaseInput {
@@ -97,6 +114,26 @@ function worksInAnyPhase(input: Input): input is AnyPhaseInput {
 
 function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
   switch (input.type) {
+    // A workspace, or the tester's copy, couldn't be made. The task waits
+    // for your retry.
+    case "workspace_failed":
+      if (!waitingForWorkspace(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([held({ kind: "failed", step: "workspace", message: input.message })]);
+
+    case "session_started":
+      if (!waitingForSession(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([{ type: "session.started", session: input.session }]);
+
+    case "session_failed":
+      if (!waitingForSession(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([held({ kind: "failed", step: "session", message: input.message })]);
+
     // A session that ends without reporting has crashed or quit, so the task
     // is held with what it last printed. The report names the session, so an
     // old session's end can't hold the task. It also names the request that
@@ -108,16 +145,13 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
         return ctx.reject(`#${task.id}'s agent isn't ${input.session}.`);
       }
       return ctx.accept([
-        {
-          type: "task.held",
-          hold: { kind: "crashed", exitCode: input.exitCode, lastLine: input.lastLine },
-        },
+        held({ kind: "crashed", exitCode: input.exitCode, lastLine: input.lastLine }),
       ]);
     }
 
-    // The stop of an agent the task let go is confirmed. Its work is saved,
-    // so the next agent can start. A failed save holds the task, and its
-    // workspace is never removed.
+    // The stop of an agent the task let go is confirmed, with its work saved.
+    // Now the task can go on: see afterStop. A failed save holds the task,
+    // and its workspace is never removed.
     case "stopped": {
       const { stopping } = task;
       if (stopping === null || stopping.request !== input.request) {
@@ -129,23 +163,13 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
         saved: input.saved,
       };
       if (input.saved === "save_failed" && task.phase !== "ended") {
-        const hold: Hold = { kind: "failed", step: "save", message: input.message };
-        return ctx.accept([confirmed, { type: "task.held", hold }]);
+        return ctx.accept([
+          confirmed,
+          held({ kind: "failed", step: "save", message: input.message }),
+        ]);
       }
-      if (
-        task.phase === "build" &&
-        task.step.kind === "awaiting_stop" &&
-        task.hold === null &&
-        task.workspace !== null
-      ) {
-        const builder = startBuilder(
-          { workspace: task.workspace, plan: task.plan },
-          task,
-          next(task),
-        );
-        return ctx.accept([confirmed, ...builder.events], builder.commands);
-      }
-      return ctx.accept([confirmed]);
+      const after = afterStop(task);
+      return ctx.accept([confirmed, ...after.events], after.commands);
     }
 
     // One open question per task, so you are never flooded by one task.
@@ -189,6 +213,36 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
   }
 }
 
+// What happens once an agent's stop is confirmed. The next agent on a task
+// only starts now, so two never work on it at once.
+function afterStop(task: Task): Effects {
+  const none: Effects = { events: [], commands: [] };
+  if (task.phase !== "build" || task.step.kind !== "awaiting_stop" || task.hold !== null) {
+    return none;
+  }
+  if (task.workspace === null) return none;
+  const { handover } = task;
+
+  // The planner stopped, or a builder was let go: a fresh builder starts.
+  if (handover === null) return startBuilder(task, task.workspace, task.plan, null, next(task));
+
+  // An `answer` merges nothing, so its handed-over commit is reviewed as is.
+  if (task.plan.intent === "answer") {
+    const copy = startCopy(task, handover.branch, next(task));
+    return {
+      events: [{ type: "review.ready", reviewed: handover.branch }, ...copy.events],
+      commands: copy.commands,
+    };
+  }
+
+  // `ship` and `try` are brought up to date with main first.
+  const request = next(task);
+  return {
+    events: [{ type: "main.requested", request }],
+    commands: [{ type: "merge_main", taskId: task.id, request, workspace: task.workspace }],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The phases
 // ---------------------------------------------------------------------------
@@ -196,18 +250,13 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
 function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision {
   switch (input.type) {
     // The scheduler picked the task. Its workspace is made first.
-    case "start": {
+    case "start":
       if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
-      const request = next(task);
-      return ctx.accept(
-        [{ type: "workspace.requested", request, tester: false }],
-        [{ type: "create_workspace", taskId: task.id, request }],
-      );
-    }
+      return ctx.accept(...createWorkspace(task, next(task)));
 
     // The planner starts in the new workspace, read only.
     case "workspace_created": {
-      if (task.step.kind !== "creating_workspace" || task.step.request !== input.request) {
+      if (!waitingForWorkspace(task, input.request)) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
       const request = next(task);
@@ -224,34 +273,11 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
             role: "planner",
             cwd: input.workspace.path,
             edits: false,
-            context: sessionContext(task, null),
+            context: sessionContext(task, null, null),
           },
         ],
       );
     }
-
-    case "workspace_failed": {
-      if (task.step.kind !== "creating_workspace" || task.step.request !== input.request) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
-      return ctx.accept([
-        { type: "task.held", hold: { kind: "failed", step: "workspace", message: input.message } },
-      ]);
-    }
-
-    case "session_started":
-      if (!waitingForSession(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
-      return ctx.accept([{ type: "session.started", session: input.session }]);
-
-    case "session_failed":
-      if (!waitingForSession(task, input.request)) {
-        return ctx.reject(notWaitingFor(task, input.request));
-      }
-      return ctx.accept([
-        { type: "task.held", hold: { kind: "failed", step: "session", message: input.message } },
-      ]);
 
     // The planner's call. Your overrides win over it, field by field. The
     // planner is stopped, and the builder starts once the stop is confirmed.
@@ -284,13 +310,7 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
         ],
         [
           ...stop.commands,
-          {
-            type: "commit_spec",
-            taskId: task.id,
-            request,
-            workspace,
-            text: input.spec,
-          },
+          { type: "commit_spec", taskId: task.id, request, workspace, text: input.spec },
         ],
       );
     }
@@ -323,11 +343,8 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
       if (task.stopping !== null || task.hold !== null || task.workspace === null) {
         return ctx.accept([committed]);
       }
-      const builder = startBuilder(
-        { workspace: task.workspace, plan: { ...step.plan, specPath: input.path } },
-        task,
-        next(task),
-      );
+      const plan = { ...step.plan, specPath: input.path };
+      const builder = startBuilder(task, task.workspace, plan, null, next(task));
       return ctx.accept([committed, ...builder.events], builder.commands);
     }
 
@@ -336,21 +353,162 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
       if (step.kind !== "committing_spec" || step.request !== input.request) {
         return ctx.reject(notWaitingFor(task, input.request));
       }
-      return ctx.accept([
-        { type: "task.held", hold: { kind: "failed", step: "spec", message: input.message } },
-      ]);
+      return ctx.accept([held({ kind: "failed", step: "spec", message: input.message })]);
     }
 
     default:
-      return ctx.reject(`Skelcrew can't take ${input.type} yet.`);
+      return ctx.reject(`#${task.id} is in triage, so it can't take ${input.type}.`);
+  }
+}
+
+function inBuild(task: TaskIn<"build">, input: Input, ctx: Context): Decision {
+  switch (input.type) {
+    // The scheduler picked the task. A task that skipped triage has no
+    // workspace yet, so that is made first. Otherwise the builder starts.
+    case "start": {
+      if (task.step.kind !== "queued") return ctx.reject(`#${task.id} isn't waiting for a slot.`);
+      if (task.workspace === null) return ctx.accept(...createWorkspace(task, next(task)));
+      const builder = startBuilder(task, task.workspace, task.plan, task.feedback, next(task));
+      return ctx.accept(builder.events, builder.commands);
+    }
+
+    case "workspace_created": {
+      if (!waitingForWorkspace(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      const builder = startBuilder(task, input.workspace, task.plan, task.feedback, next(task));
+      return ctx.accept(
+        [{ type: "workspace.created", workspace: input.workspace }, ...builder.events],
+        builder.commands,
+      );
+    }
+
+    // The builder hands its work over. It is stopped, saving any uncommitted
+    // work, and the task goes on once the stop is confirmed. An `answer`
+    // hands over a report instead of a change, and never edits.
+    case "done":
+    case "done_answer": {
+      if (task.question !== null) {
+        return ctx.reject(`#${task.id} has an open question. Wait for the answer.`);
+      }
+      const answer = task.plan.intent === "answer";
+      if (answer && input.type === "done") {
+        return ctx.reject(`#${task.id} is an answer task. Hand it over with a report.`);
+      }
+      if (!answer && input.type === "done_answer") {
+        return ctx.reject(
+          `#${task.id} is a ${task.plan.intent} task. Hand it over with done, not a report.`,
+        );
+      }
+      if (input.type === "done" && input.branch.changedFiles.length === 0) {
+        return ctx.reject("The branch has no changes.");
+      }
+      const handover: EventBody =
+        input.type === "done"
+          ? {
+              type: "build.done",
+              handover: { kind: "summary", text: input.summary, branch: input.branch },
+            }
+          : {
+              type: "build.done",
+              handover: {
+                kind: "report",
+                text: input.report,
+                proposals: input.proposals,
+                branch: input.branch,
+              },
+            };
+      const stop = stopAgent(task, input.session, next(task), !answer, null);
+      return ctx.accept([handover, ...stop.events], stop.commands);
+    }
+
+    // Main is in the branch. That commit is the one review, approval and
+    // delivery all use.
+    case "main_merged": {
+      if (!waitingForMerge(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      const copy = startCopy(task, input.reviewed, next(task));
+      return ctx.accept(
+        [{ type: "main.merged", reviewed: input.reviewed }, ...copy.events],
+        copy.commands,
+      );
+    }
+
+    // The merge is left unfinished, and a fresh builder finishes it. That
+    // counts as a loop, and at the cap the task waits for you.
+    case "main_conflict": {
+      if (!waitingForMerge(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      const conflict: EventBody = { type: "main.conflict", files: input.files };
+      if (task.loops + 1 >= ctx.config.loopCap) {
+        const findings = `Merging main conflicted in ${input.files.join(", ")}.`;
+        return ctx.accept([conflict, held({ kind: "loop_cap", findings })]);
+      }
+      if (task.workspace === null) return ctx.reject(`#${task.id} has no workspace.`);
+      const feedback: Feedback = { kind: "conflict", files: input.files };
+      const builder = startBuilder(task, task.workspace, task.plan, feedback, next(task));
+      return ctx.accept([conflict, ...builder.events], builder.commands);
+    }
+
+    case "main_failed":
+      if (!waitingForMerge(task, input.request)) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([held({ kind: "failed", step: "merge_main", message: input.message })]);
+
+    default:
+      return ctx.reject(`#${task.id} is in build, so it can't take ${input.type}.`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Agents
+// Workspaces and agents
 // ---------------------------------------------------------------------------
 
 type Effects = { events: EventBody[]; commands: Command[] };
+
+// Makes the task's workspace: a worktree on a new branch from main.
+function createWorkspace(task: Task, request: number): [EventBody[], Command[]] {
+  return [
+    [{ type: "workspace.requested", request, tester: false }],
+    [{ type: "create_workspace", taskId: task.id, request }],
+  ];
+}
+
+// Makes the tester's own copy of the reviewed commit, which starts review.
+function startCopy(task: Task, reviewed: Reviewed, request: number): Effects {
+  return {
+    events: [{ type: "workspace.requested", request, tester: true }],
+    commands: [{ type: "create_copy", taskId: task.id, request, commit: reviewed.head }],
+  };
+}
+
+// Starts a builder in the task's workspace, told why it is there. It may
+// edit, except on an `answer` task, which never changes code.
+function startBuilder(
+  task: Task,
+  workspace: Workspace,
+  plan: Plan,
+  feedback: Feedback | null,
+  request: number,
+): Effects {
+  return {
+    events: [{ type: "session.requested", request, role: "builder" }],
+    commands: [
+      {
+        type: "start_session",
+        taskId: task.id,
+        request,
+        role: "builder",
+        cwd: workspace.path,
+        edits: plan.intent !== "answer",
+        context: sessionContext(task, plan, feedback),
+      },
+    ],
+  };
+}
 
 // Stops an agent the task lets go. With `save`, its uncommitted work is
 // committed after it stops. `remove` is a workspace to remove after that,
@@ -368,27 +526,9 @@ function stopAgent(
   };
 }
 
-// Starts a builder in the task's workspace. It may edit, except on an
-// `answer` task, which never changes code.
-function startBuilder(
-  work: { workspace: Workspace; plan: Plan },
-  task: Task,
-  request: number,
-): Effects {
-  return {
-    events: [{ type: "session.requested", request, role: "builder" }],
-    commands: [
-      {
-        type: "start_session",
-        taskId: task.id,
-        request,
-        role: "builder",
-        cwd: work.workspace.path,
-        edits: work.plan.intent !== "answer",
-        context: sessionContext(task, work.plan),
-      },
-    ],
-  };
+// What a new session is told, on top of its role's preamble.
+function sessionContext(task: Task, plan: Plan | null, feedback: Feedback | null): SessionContext {
+  return { title: task.title, description: task.description, plan, feedback, answer: null };
 }
 
 // A report from an agent that isn't the task's current one: the reason, or
@@ -402,14 +542,27 @@ function senderMismatch(task: Task, input: Input): string | null {
   return null;
 }
 
-// What a new session is told, on top of its role's preamble.
-function sessionContext(task: Task, plan: Plan | null): SessionContext {
-  return { title: task.title, description: task.description, plan, feedback: null, answer: null };
-}
-
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+function held(hold: Hold): EventBody {
+  return { type: "task.held", hold };
+}
+
+// Whether the task waits for the workspace, or tester's copy, of this request.
+function waitingForWorkspace(task: Task, request: number): boolean {
+  if (task.phase === "ended") return false;
+  const { step } = task;
+  return (
+    (step.kind === "creating_workspace" || step.kind === "creating_copy") &&
+    step.request === request
+  );
+}
+
+function waitingForMerge(task: TaskIn<"build">, request: number): boolean {
+  return task.step.kind === "merging_main" && task.step.request === request;
+}
 
 // The number for the task's next request. The event that records a request
 // and the command that sends it both use it. An input that sends two takes

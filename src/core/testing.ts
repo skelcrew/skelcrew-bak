@@ -181,3 +181,55 @@ export function buildRunning(
     sessionStarted(4, builder),
   ]);
 }
+
+export const branch = { head: sha("a"), changedFiles: ["src/export/csv.ts"] };
+
+export const done = (
+  summary = "Empty reports now export a header row.",
+  facts: { head: CommitSha; changedFiles: string[] } = branch,
+): Input => ({ by: "agent", session: builder, type: "done", summary, branch: facts });
+
+export const doneAnswer = (report = "Search is slow because of N+1 queries."): Input => ({
+  by: "agent",
+  session: builder,
+  type: "done_answer",
+  report,
+  proposals: [],
+  branch,
+});
+
+export const reviewed = { head: sha("c"), changedFiles: ["src/export/csv.ts"] };
+
+export const mainMerged = (request: number, facts = reviewed): Input => ({
+  by: "plugin",
+  type: "main_merged",
+  request,
+  reviewed: facts,
+});
+
+export const mainConflict = (request: number, files = ["src/export/csv.ts"]): Input => ({
+  by: "plugin",
+  type: "main_conflict",
+  request,
+  files,
+});
+
+export const mainFailed = (request: number, message = "index.lock exists"): Input => ({
+  by: "plugin",
+  type: "main_failed",
+  request,
+  message,
+});
+
+// A task you added with intent and rigor, skipping triage.
+export const addPlanned = (
+  intent: Intent = "ship",
+  rigor: Rigor = "light",
+  approve = false,
+): Input => ({
+  by: "you",
+  type: "add",
+  title: "Fix button color",
+  description: null,
+  plan: { intent, rigor, approve },
+});
