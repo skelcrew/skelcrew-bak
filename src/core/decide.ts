@@ -26,9 +26,12 @@ import {
 import {
   holdsWorkspace,
   runningSession,
+  settling,
   type TaskIn,
+  waitingForMerge,
   waitingForSession,
   waitingForSlot,
+  waitingForWorkspace,
 } from "./task";
 import type {
   AddPlan,
@@ -1089,39 +1092,6 @@ function deliveryMismatch(task: TaskIn<"build" | "review">, delivered: Delivered
     return `Delivered ${delivered.commit}, but the reviewed commit is ${reviewed.head}.`;
   }
   return null;
-}
-
-// Whether a step is under way that a pause must wait for: something is being
-// made, started, merged or delivered.
-function settling(task: Exclude<Task, { phase: "ended" }>): boolean {
-  if (task.stopping !== null) return true;
-  switch (task.step.kind) {
-    case "creating_workspace":
-    case "creating_copy":
-    case "starting":
-      return true;
-    // Null once a failure answered it, so nothing is under way.
-    case "committing_spec":
-    case "merging_main":
-    case "delivering":
-      return task.step.request !== null;
-    default:
-      return false;
-  }
-}
-
-// Whether the task waits for the workspace, or tester's copy, of this request.
-function waitingForWorkspace(task: Task, request: number): boolean {
-  if (task.phase === "ended") return false;
-  const { step } = task;
-  return (
-    (step.kind === "creating_workspace" || step.kind === "creating_copy") &&
-    step.request === request
-  );
-}
-
-function waitingForMerge(task: TaskIn<"build">, request: number): boolean {
-  return task.step.kind === "merging_main" && task.step.request === request;
 }
 
 // The number for the task's next request. The event that records a request

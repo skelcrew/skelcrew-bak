@@ -20,6 +20,21 @@ export function waitingForSession(task: Task, request: number): boolean {
   return task.step.kind === "starting" && task.step.request === request;
 }
 
+// Whether the task waits for the workspace, or tester's copy, of this request.
+export function waitingForWorkspace(task: Task, request: number): boolean {
+  if (task.phase === "ended") return false;
+  const { step } = task;
+  return (
+    (step.kind === "creating_workspace" || step.kind === "creating_copy") &&
+    step.request === request
+  );
+}
+
+// Whether the task waits for the merge of main of this request.
+export function waitingForMerge(task: TaskIn<"build">, request: number): boolean {
+  return task.step.kind === "merging_main" && task.step.request === request;
+}
+
 // Whether the task holds this workspace or tester's copy.
 export function holdsWorkspace(task: Task, path: string): boolean {
   switch (task.phase) {
@@ -48,4 +63,23 @@ export function waitingForSlot(task: Task): boolean {
     return step.request === null;
   }
   return false;
+}
+
+// Whether a step is under way that a pause must wait for: something is being
+// made, started, merged or delivered.
+export function settling(task: Exclude<Task, { phase: "ended" }>): boolean {
+  if (task.stopping !== null) return true;
+  switch (task.step.kind) {
+    case "creating_workspace":
+    case "creating_copy":
+    case "starting":
+      return true;
+    // Null once a failure answered it, so nothing is under way.
+    case "committing_spec":
+    case "merging_main":
+    case "delivering":
+      return task.step.request !== null;
+    default:
+      return false;
+  }
 }
