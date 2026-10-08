@@ -62,9 +62,9 @@ bun run check
 ```
 
 It runs the lint and format check, the typecheck, and the tests. It never changes files.
-`bun run fix` does that. Until the scaffold adds both scripts, this is the target.
+`bun run fix` does that.
 
-From the scaffold on, the tests run through a watchdog that stops a run hung for more than 6
+The tests run through a watchdog that stops a run hung for more than 6
 minutes. Bun's test runner can hang past every timer inside the run, so only a separate
 process can stop it.
 
@@ -109,14 +109,13 @@ read, rewrite it.
 - `docs/core.md`: the core worked out in words: phases, steps, inputs by sender, commands.
 - `docs/invariants.md`: the rules the core must never break. Tests are written against it.
 - `docs/learnings.md`: what v3 taught us, and code worth reusing from it.
-- `CLAUDE.md` links to this file, so every agent reads the same rules.
-
-From the scaffold on, this list also names:
-
 - `docs/ARCHITECTURE.md`: a short guide to reading the code: the main parts, how an input
   flows through them, and where to start.
-- the core's folder, which is critical code, see above.
-- the saved events fixture, see Saved events below.
+- `src/core/`: the core. Critical code, see above.
+- `src/checks/run-tests.ts`: the test watchdog.
+- `CLAUDE.md` links to this file, so every agent reads the same rules.
+
+The saved events fixture joins this list when the store exists, see Saved events below.
 
 **Keep `docs/ARCHITECTURE.md` short.** It is an overview, not a catalogue. It names the main
 parts and how they fit, never single files, functions or features, so most changes leave it

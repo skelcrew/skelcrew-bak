@@ -1,0 +1,7 @@
+node_modules/
+# Skelcrew's runtime files. They stay out of git.
+.skelcrew/skelcrew.db*
+.skelcrew/daemon.log
+.skelcrew/daemon.pid
+.skelcrew/daemon.sock
+.skelcrew/out/
