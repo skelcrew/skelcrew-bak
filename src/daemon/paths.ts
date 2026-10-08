@@ -61,9 +61,9 @@ export function daemonPaths(
 
 // Makes the socket folder in /tmp if it isn't there, for this user alone.
 // Then says why it can't be trusted, or null if it can. It must be a real
-// folder that belongs to this user. Otherwise its owner could put their
-// own socket there, and answer in the daemon's place. Once it is the
-// user's own, nobody else can put anything in it, or move it away.
+// folder that belongs to this user, and that nobody else can reach into.
+// Otherwise someone else could put their own socket there, and answer in
+// the daemon's place.
 export function ownSocketFolder(path: string): string | null {
   try {
     mkdirSync(path, { mode: 0o700, recursive: true });
@@ -78,7 +78,10 @@ export function ownSocketFolder(path: string): string | null {
     return `${path} couldn't be made for the daemon's socket: ${reason}`;
   }
   const mine = found.uid === process.getuid?.();
-  if (mine && found.isDirectory()) return null;
+  if (mine && found.isDirectory() && (found.mode & 0o077) === 0) return null;
+  if (mine && found.isDirectory()) {
+    return `${path} is open to other users, so skelcrew won't use it. Run \`chmod 700 ${path}\`, then try again.`;
+  }
   if (mine) return `${path} isn't a folder, so skelcrew won't use it. Remove it, then try again.`;
   return `${path} belongs to another user, so skelcrew won't use it. An administrator must remove it.`;
 }

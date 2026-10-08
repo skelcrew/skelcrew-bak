@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { daemonPaths, findRepo, ownSocketFolder } from "./paths";
 import { cleanUp, folder } from "./testing";
@@ -91,6 +91,16 @@ describe("the shared socket folder", () => {
 
     expect(ownSocketFolder(path)).toBeNull();
     expect(ownSocketFolder(path)).toBeNull();
+  });
+
+  test("is refused when other users can reach into it", () => {
+    const path = join(folder(), "sockets");
+    mkdirSync(path, { mode: 0o700 });
+    chmodSync(path, 0o777);
+
+    expect(ownSocketFolder(path)).toBe(
+      `${path} is open to other users, so skelcrew won't use it. Run \`chmod 700 ${path}\`, then try again.`,
+    );
   });
 
   test("is refused when something that isn't a folder is in its place", () => {

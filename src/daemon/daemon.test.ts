@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { SessionId, TaskId } from "../core/ids";
@@ -97,6 +97,16 @@ describe("the daemon", () => {
     ]);
     expect(stopped).toBe("stopped");
     idle.destroy();
+  });
+
+  // The socket lives in .skelcrew, so nobody else can reach it, even in the
+  // moment before its own permissions are set.
+  test("keeps .skelcrew to this user alone", async () => {
+    const repo = folder();
+    mkdirSync(join(repo, ".skelcrew"), { mode: 0o755 });
+    await started(repo);
+
+    expect(statSync(join(repo, ".skelcrew")).mode & 0o777).toBe(0o700);
   });
 
   test("keeps its tasks across a restart", async () => {

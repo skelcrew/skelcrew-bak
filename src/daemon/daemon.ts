@@ -2,7 +2,7 @@
 // the repository's lock, opens the store, reopens the loop from it, and
 // answers requests on a local socket until it is stopped.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readConfig } from "../config/config";
 import type { SessionId } from "../core/ids";
@@ -66,7 +66,10 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   const read = readConfig(text);
   if (!read.ok) return { ok: false, message: `skelcrew.yaml: ${read.reasons.join("; ")}` };
 
-  mkdirSync(paths.folder, { recursive: true });
+  // The socket lives here, so only this user may reach in, from before it
+  // exists.
+  mkdirSync(paths.folder, { recursive: true, mode: 0o700 });
+  chmodSync(paths.folder, 0o700);
   const locked = takeLock(paths.repo);
   if (!locked.ok) return locked;
   const lock = locked.lock;
