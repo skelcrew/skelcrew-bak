@@ -9,6 +9,7 @@
 // agents and make workspaces.
 
 import picomatch from "picomatch";
+import { type Context, held, isBlank, makeContext, next, notWaitingFor } from "./context";
 import {
   createWorkspace,
   deliver,
@@ -35,32 +36,20 @@ import {
 } from "./task";
 import type {
   AddPlan,
-  Command,
   Config,
   Decide,
   Decision,
   Delivered,
-  Envelope,
   EventBody,
   Feedback,
   Handover,
-  Hold,
   Input,
   Plan,
   Reviewed,
   SessionId,
   Task,
-  Timestamp,
   Workspace,
 } from "./types";
-
-// What every step needs besides the task and the input.
-type Context = {
-  accept: (bodies: EventBody[], commands?: Command[]) => Decision;
-  reject: (reason: string) => Decision;
-  at: Timestamp;
-  config: Config;
-};
 
 export const decide: Decide = (task, envelope, config) => {
   const ctx = makeContext(envelope, config);
@@ -120,19 +109,6 @@ export const decide: Decide = (task, envelope, config) => {
       return ctx.reject(`#${task.id} has ended.`);
   }
 };
-
-function makeContext({ taskId, at, input }: Envelope, config: Config): Context {
-  return {
-    accept: (bodies, commands = []) => ({
-      ok: true,
-      events: bodies.map((body) => ({ ...body, v: 1, taskId, at })),
-      commands,
-    }),
-    reject: (reason) => ({ ok: false, rejection: { input: input.type, reason } }),
-    at,
-    config,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // The steps
@@ -1075,10 +1051,6 @@ function wrongPhase(task: Task, input: Input, ctx: Context): Decision {
   return ctx.reject(`#${task.id} is in ${task.phase}, so it can't take ${input.type}.`);
 }
 
-function held(hold: Hold): EventBody {
-  return { type: "task.held", hold };
-}
-
 // Why a delivery doesn't match what was reviewed, or null if it does. It
 // must be exactly the reviewed commit, as a report for an `answer` and a
 // branch otherwise.
@@ -1094,22 +1066,10 @@ function deliveryMismatch(task: TaskIn<"build" | "review">, delivered: Delivered
   return null;
 }
 
-// The number for the task's next request. The event that records a request
-// and the command that sends it both use it. An input that sends two takes
-// this one and the one after.
-function next(task: Task): number {
-  return task.requests + 1;
-}
-
 // Why an agent's report that moves the task on is refused: the agent asked
 // you something, and goes on only once it has your answer.
 function waitForAnswer(task: Task): string {
   return `#${task.id} has an open question. Wait for the answer.`;
-}
-
-// Why a reply is refused: it answers a request the task isn't waiting on.
-function notWaitingFor(task: Task, request: number): string {
-  return `This reply answers request ${request}, but #${task.id} isn't waiting on it.`;
 }
 
 // The plan of a task that skips triage: your intent, rigor and approval,
@@ -1117,8 +1077,4 @@ function notWaitingFor(task: Task, request: number): string {
 function skippingTriage(yours: AddPlan, title: string, description: string | null): Plan {
   const brief = description === null ? title : `${title}\n\n${description}`;
   return { ...yours, brief, specPath: null };
-}
-
-function isBlank(text: string): boolean {
-  return text.trim() === "";
 }
