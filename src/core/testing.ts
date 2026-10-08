@@ -35,15 +35,23 @@ export const workspace: Workspace = {
 // The tester's copy of the reviewed commit, defined below with it.
 export const copyPath = "/repo/.skelcrew/review/142";
 
-export type Run = { task: Task; events: TaskEvent[]; commands: Command[] };
+export type Run = {
+  task: Task;
+  events: TaskEvent[];
+  commands: Command[];
+  allEvents: TaskEvent[];
+  allCommands: Command[];
+};
 
 // Sends each input through decide, and folds the accepted events through
 // evolve, as the loop does. Fails the test on the first rejection. Returns the
-// task, and the events and commands of the last input.
+// task, the events and commands of the last input, and those of every input.
 export function play(from: Task | null, inputs: Input[], cfg: Config = config): Run {
   let task = from;
   let events: TaskEvent[] = [];
   let commands: Command[] = [];
+  const allEvents: TaskEvent[] = [];
+  const allCommands: Command[] = [];
   for (const [i, input] of inputs.entries()) {
     const decision = decide(task, { taskId: id, at: 1_000 + i, input }, cfg);
     if (!decision.ok) throw new Error(`Rejected ${input.type}: ${decision.rejection.reason}`);
@@ -54,9 +62,11 @@ export function play(from: Task | null, inputs: Input[], cfg: Config = config): 
     }
     events = decision.events;
     commands = decision.commands;
+    allEvents.push(...events);
+    allCommands.push(...commands);
   }
   if (task === null) throw new Error("No task was created.");
-  return { task, events, commands };
+  return { task, events, commands, allEvents, allCommands };
 }
 
 export function run(...inputs: Input[]): Run {
@@ -304,6 +314,31 @@ export function reviewRunning(
     copyCreated(7),
     sessionStarted(8, tester),
   ]);
+}
+
+// Every input of a fix that goes through triage, build, review and delivery.
+// With a spec, the planner's spec is committed before the builder starts, so
+// every later request is one higher.
+export function shipped(spec: string | null = null): Input[] {
+  const s = spec === null ? 0 : 1;
+  return [
+    add(),
+    start,
+    workspaceCreated(1),
+    sessionStarted(2, planner),
+    proceed(spec),
+    stopped(3, planner),
+    ...(spec === null ? [] : [specCommitted(4)]),
+    sessionStarted(4 + s, builder),
+    done(),
+    stopped(5 + s, builder, "saved"),
+    mainMerged(6 + s),
+    copyCreated(7 + s),
+    sessionStarted(8 + s, tester),
+    pass(),
+    stopped(9 + s, tester),
+    delivered(10 + s),
+  ];
 }
 
 export const pause: Input = { by: "you", type: "pause" };

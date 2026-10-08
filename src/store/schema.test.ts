@@ -1,67 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import {
-  add,
-  addPlanned,
-  builder,
-  copyCreated,
-  delivered,
-  done,
-  id,
-  mainMerged,
-  pass,
-  planner,
-  play,
-  proceed,
-  sessionStarted,
-  start,
-  stopped,
-  tester,
-  workspaceCreated,
-} from "../core/testing";
-import type { Input, Task, TaskEvent } from "../core/types";
+import { addPlanned, id, run, shipped } from "../core/testing";
 import { parseTaskEvent } from "./schema";
 
 // Every event of whole lifecycles, through triage, build, review and delivery.
-function lifecycle(inputs: Input[]): TaskEvent[] {
-  const all: TaskEvent[] = [];
-  let task: Task | null = null;
-  for (const input of inputs) {
-    const step = play(task, [input]);
-    all.push(...step.events);
-    task = step.task;
-  }
-  return all;
-}
-
-const shipped = lifecycle([
-  add(),
-  start,
-  workspaceCreated(1),
-  sessionStarted(2, planner),
-  proceed("# Spec"),
-  stopped(3, planner),
-  { by: "plugin", type: "spec_committed", request: 4, path: "docs/plans/142.md" },
-  sessionStarted(5, builder),
-  done(),
-  stopped(6, builder, "saved"),
-  mainMerged(7),
-  copyCreated(8),
-  sessionStarted(9, tester),
-  pass(),
-  stopped(10, tester),
-  delivered(11),
-]);
+const shippedEvents = run(...shipped("# Spec")).allEvents;
 
 describe("the event schema", () => {
   test("reads back every event of a whole lifecycle exactly as written", () => {
-    for (const event of [...shipped, ...lifecycle([addPlanned("try", "light")])]) {
+    for (const event of [...shippedEvents, ...run(addPlanned("try", "light")).allEvents]) {
       const stored = JSON.parse(JSON.stringify(event));
       expect(parseTaskEvent(stored)).toEqual({ ok: true, value: event });
     }
   });
 
   test("refuses an unknown field, rather than dropping it", () => {
-    const [received] = shipped;
+    const [received] = shippedEvents;
     expect(parseTaskEvent({ ...received, extra: 1 }).ok).toBe(false);
   });
 
@@ -74,7 +27,7 @@ describe("the event schema", () => {
   });
 
   test("refuses another version", () => {
-    const [received] = shipped;
+    const [received] = shippedEvents;
     expect(parseTaskEvent({ ...received, v: 2 }).ok).toBe(false);
   });
 });

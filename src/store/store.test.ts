@@ -4,44 +4,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskId } from "../core/ids";
-import {
-  add,
-  builder,
-  done,
-  id,
-  planner,
-  play,
-  proceed,
-  sessionStarted,
-  start,
-  stopped,
-  workspaceCreated,
-} from "../core/testing";
+import { builder, id, run, shipped } from "../core/testing";
 import type { Command, Task, TaskEvent } from "../core/types";
 import { EventStore } from "./store";
 
 // Every event of one task that went through triage, and whose builder has
 // handed over, in order.
 function lifecycle(): { events: TaskEvent[]; task: Task } {
-  const inputs = [
-    add(),
-    start,
-    workspaceCreated(1),
-    sessionStarted(2, planner),
-    proceed(),
-    stopped(3, planner),
-    sessionStarted(4, builder),
-    done(),
-  ];
-  const all: TaskEvent[] = [];
-  let task: Task | null = null;
-  for (const input of inputs) {
-    const step = play(task, [input]);
-    all.push(...step.events);
-    task = step.task;
-  }
-  if (task === null) throw new Error("no task");
-  return { events: all, task };
+  const handedOver = shipped().findIndex((input) => input.type === "done") + 1;
+  const { allEvents, task } = run(...shipped().slice(0, handedOver));
+  return { events: allEvents, task };
 }
 
 const events = () => lifecycle().events;

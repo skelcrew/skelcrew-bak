@@ -4,75 +4,40 @@
 // `bun test --update-snapshots`.
 
 import { describe, expect, test } from "bun:test";
-import { decide } from "./decide";
-import { evolve } from "./evolve";
 import {
-  add,
   addPlanned,
   approve,
   branch,
   builder,
   changes,
-  config,
   copyCreated,
   delivered,
   deliveredReport,
   done,
-  id,
   mainMerged,
   pass,
   pause,
-  planner,
-  proceed,
   resume,
   retry,
+  run,
   sessionEnded,
   sessionStarted,
+  shipped,
   start,
   stopped,
   tester,
   workspaceCreated,
 } from "./testing";
-import type { Input, Task, TaskEvent } from "./types";
+import type { Input, TaskEvent } from "./types";
 
 // Plays a story and returns every event, refusing any rejected input.
 function story(...inputs: Input[]): TaskEvent[] {
-  let task: Task | null = null;
-  const log: TaskEvent[] = [];
-  for (const [i, input] of inputs.entries()) {
-    const decision = decide(task, { taskId: id, at: 1_000 + i, input }, config);
-    if (!decision.ok) throw new Error(`Rejected ${input.type}: ${decision.rejection.reason}`);
-    for (const event of decision.events) {
-      const evolved = evolve(task, event);
-      if (!evolved.ok) throw new Error(evolved.reason);
-      task = evolved.task;
-      log.push(event);
-    }
-  }
-  return log;
+  return run(...inputs).allEvents;
 }
 
 describe("golden stories", () => {
   test("a fix goes from triage through build and review to delivery", () => {
-    expect(
-      story(
-        add("Fix empty export"),
-        start,
-        workspaceCreated(1),
-        sessionStarted(2, planner),
-        proceed(),
-        stopped(3, planner),
-        sessionStarted(4, builder),
-        done(),
-        stopped(5, builder, "saved"),
-        mainMerged(6),
-        copyCreated(7),
-        sessionStarted(8, tester),
-        pass(),
-        stopped(9, tester),
-        delivered(10),
-      ),
-    ).toMatchSnapshot();
+    expect(story(...shipped())).toMatchSnapshot();
   });
 
   test("a flagged fix waits for your sign-off", () => {
