@@ -43,22 +43,31 @@ reducer (`decide` and `evolve`), the scheduler, their types, and the invariants.
 - **Errors are values in the core.** Functions return a result that says what failed. They
   do not throw.
 
+## Test first
+
+Every change to behaviour starts with a failing test.
+
+- **Red, then green.** Write the failing test first. Run it, and confirm it fails for the
+  reason you meant: an import or fixture error is a broken test, not red. Then write the
+  smallest code that passes, and tidy up while the test stays green.
+- **Never add a test after the code.** A test written against existing code checks what the
+  code does, not what it should do.
+- **Tests check what a user of the code sees**, never private helpers. Tests never start a
+  real agent or call an outside service. The simulator stands in for them.
+
 ## Definition of done
 
 ```
 bun run check
 ```
 
-It runs the lint and format check, the typecheck, and the tests. It never changes files;
+It runs the lint and format check, the typecheck, and the tests. It never changes files.
 `bun run fix` does that. Until the scaffold adds both scripts, this is the target.
 
-- **Red, then green.** Write the failing test first. Run it, and confirm it fails for the
-  reason you meant: an import or fixture error is a broken test, not red. Then write the
-  smallest code that passes, and tidy up while the test stays green. Never add a test after
-  the code. A test written against existing code checks what the code does, not what it
-  should do.
-- **Tests check what a user of the code sees**, never private helpers. Tests never start a
-  real agent or call an outside service; the simulator stands in for them.
+From the scaffold on, the tests run through a watchdog that stops a run hung for more than 6
+minutes. Bun's test runner can hang past every timer inside the run, so only a separate
+process can stop it.
+
 - **Commit in small, self-contained slices.** Each commit passes `bun run check` on its own,
   and its message says what changed and why. A failing test and its fix land in the same
   commit. Two small diffs review better than one large one, so split before the first
@@ -101,3 +110,26 @@ read, rewrite it.
 - `docs/invariants.md`: the rules the core must never break. Tests are written against it.
 - `docs/learnings.md`: what v3 taught us, and code worth reusing from it.
 - `CLAUDE.md` links to this file, so every agent reads the same rules.
+
+From the scaffold on, this list also names:
+
+- `docs/ARCHITECTURE.md`: a short guide to reading the code: the main parts, how an input
+  flows through them, and where to start.
+- the core's folder, which is critical code, see above.
+- the saved events fixture, see Saved events below.
+
+**Keep `docs/ARCHITECTURE.md` short.** It is an overview, not a catalogue. It names the main
+parts and how they fit, never single files, functions or features, so most changes leave it
+alone. Update it only when a main part is added, removed or renamed, or when the way an input
+flows through the parts changes. If it grows past a few screens, it is describing too much.
+v3's grew to a table row per file and changed in almost every pull request.
+
+## Saved events
+
+The event log is kept forever, so every event shape that was ever saved must still read
+back. A fixture file of saved events guards this, and a test reads it on every run.
+
+- **Until dogfooding starts**, an event's shape may change. The fixture is then regenerated
+  in the same commit, and the commit message says so.
+- **Once dogfooding starts**, the fixture is never regenerated. A change to an event's shape
+  then needs a way to read the old shape, and a new version number on the event.
