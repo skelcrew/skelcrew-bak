@@ -39,7 +39,9 @@ type Job =
       reply: Reply;
       stops: SessionId | null;
     }
-  | { kind: "agent"; taskId: TaskId; input: Input };
+  // Anything else sent as an input: an agent's report, or a start the
+  // scheduler picked.
+  | { kind: "input"; taskId: TaskId; input: Input };
 
 export type Options = {
   seed?: number; // interleaves tasks' replies at random
@@ -117,8 +119,12 @@ export class Simulator {
   // nothing waits, the loop starts what the scheduler picks.
   run(limit: { steps?: number } = {}): void {
     for (let step = 0; step < (limit.steps ?? 10_000); step++) {
-      if (this.queue.length === 0 && this.loop.startWaiting(this.tick()).length === 0) {
-        if (this.queue.length === 0) return;
+      // Nothing waits: start what the scheduler picks, each through the same
+      // checks as any other input. Stop when it picks nothing.
+      if (this.queue.length === 0) {
+        const picks = this.loop.picks();
+        if (picks.length === 0) return;
+        for (const { taskId, input } of picks) this.queue.push({ kind: "input", taskId, input });
       }
       const job = this.next();
       if (job === undefined) continue;
@@ -160,7 +166,7 @@ export class Simulator {
 
   // Sends one input of yours. False if its save failed.
   private send(taskId: TaskId, input: Input): boolean {
-    return this.deliver({ kind: "agent", taskId, input });
+    return this.deliver({ kind: "input", taskId, input });
   }
 
   // The store, with saves that fail at random.
@@ -182,9 +188,10 @@ export class Simulator {
 
   // The daemon restarts. Work the tools hadn't finished is lost, and the
   // reopened loop sends it again from the outbox. Agents keep running, as
-  // they do in tmux, so their next reports still arrive.
+  // they do in tmux, so their next reports still arrive. A start picked
+  // before the restart is kept too, and refused if it no longer fits.
   restart(): void {
-    const agents = this.queue.filter((job) => job.kind === "agent");
+    const agents = this.queue.filter((job) => job.kind === "input");
     this.queue = [];
     const opened = Loop.open(this.config, this.tools(), this.log, () => this.tick());
     if (!opened.ok) throw new Error(opened.reason);
@@ -359,7 +366,7 @@ export class Simulator {
     this.live.add(session);
     this.mostAgentsAtOnce = Math.max(this.mostAgentsAtOnce, this.live.size);
     const next = this.agent(command.taskId, command.role, session);
-    this.queue.push({ kind: "agent", taskId: command.taskId, input: next });
+    this.queue.push({ kind: "input", taskId: command.taskId, input: next });
   }
 
   // ---------------------------------------------------------------------------

@@ -109,12 +109,19 @@ export class Loop {
   // Delivers kept answers and starts the tasks the scheduler picks, within
   // max_running. Returns the tasks it picked.
   startWaiting(at: number): TaskId[] {
-    const picks = schedule([...this.tasks.values()], this.config, this.inFlight);
-    for (const taskId of picks) {
+    const picks = this.picks();
+    for (const { taskId, input } of picks) this.send(taskId, input, at);
+    return picks.map(({ taskId }) => taskId);
+  }
+
+  // What the scheduler picks now, as the input each pick becomes: a kept
+  // answer to deliver, or a start.
+  picks(): { taskId: TaskId; input: Input }[] {
+    return schedule([...this.tasks.values()], this.config, this.inFlight).map((taskId) => {
       const kept = this.task(taskId)?.keptAnswer ?? null;
-      this.send(taskId, { by: "daemon", type: kept === null ? "start" : "deliver_answer" }, at);
-    }
-    return picks;
+      const input: Input = { by: "daemon", type: kept === null ? "start" : "deliver_answer" };
+      return { taskId, input };
+    });
   }
 
   // One input for one task, at the given time.
