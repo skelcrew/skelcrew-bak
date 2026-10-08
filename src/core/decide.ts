@@ -6,7 +6,17 @@
 // rules apply. The steps follow it.
 
 import type { TaskIn } from "./task";
-import type { Command, Decide, Decision, Envelope, EventBody, Input, Plan, Task } from "./types";
+import type {
+  Command,
+  Decide,
+  Decision,
+  Envelope,
+  EventBody,
+  Input,
+  Plan,
+  SessionContext,
+  Task,
+} from "./types";
 
 // What every step needs besides the task and the input.
 type Context = {
@@ -79,6 +89,41 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
         [{ type: "create_workspace", taskId: task.id, request }],
       );
     }
+
+    // The planner starts in the new workspace, read only.
+    case "workspace_created": {
+      if (task.step.kind !== "creating_workspace" || task.step.request !== input.request) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      const request = next(task);
+      return ctx.accept(
+        [
+          { type: "workspace.created", workspace: input.workspace },
+          { type: "session.requested", request, role: "planner" },
+        ],
+        [
+          {
+            type: "start_session",
+            taskId: task.id,
+            request,
+            role: "planner",
+            cwd: input.workspace.path,
+            edits: false,
+            context: sessionContext(task, null),
+          },
+        ],
+      );
+    }
+
+    case "workspace_failed": {
+      if (task.step.kind !== "creating_workspace" || task.step.request !== input.request) {
+        return ctx.reject(notWaitingFor(task, input.request));
+      }
+      return ctx.accept([
+        { type: "task.held", hold: { kind: "failed", step: "workspace", message: input.message } },
+      ]);
+    }
+
     default:
       return ctx.reject(`Skelcrew can't take ${input.type} yet.`);
   }
@@ -93,6 +138,16 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
 // use this number.
 function next(task: Task): number {
   return task.requests + 1;
+}
+
+// What a new session is told, on top of its role's preamble.
+function sessionContext(task: Task, plan: Plan | null): SessionContext {
+  return { title: task.title, description: task.description, plan, feedback: null, answer: null };
+}
+
+// Why a reply is refused: it answers a request the task isn't waiting on.
+function notWaitingFor(task: Task, request: number): string {
+  return `This reply answers request ${request}, but #${task.id} isn't waiting on it.`;
 }
 
 function brief(title: string, description: string | null): string {
