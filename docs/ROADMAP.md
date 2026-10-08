@@ -13,18 +13,18 @@ The rules, as pure code: `decide`, `evolve` and `schedule`.
 Done when every core rule in `docs/invariants.md` holds under property tests, and whole
 lifecycles are snapshotted as golden stories. Reviewed by Codex and Fable.
 
-## Next
-
-### 2. Store and loop — current
+### 2. Store and loop
 
 Decisions survive a crash. The loop runs each input through the core, saves events and
 commands in one SQLite transaction, and carries the commands out. Reopening resends what
 didn't finish.
 
 Done when the simulator runs whole lifecycles with fake tools, and a property test kills
-the loop at random moments and finds every task as it was.
+the loop at random moments and finds every task as it was. Reviewed by Codex and Fable.
 
-### 3. Daemon and CLI
+## Next
+
+### 3. Daemon and CLI — current
 
 You drive Skelcrew from a terminal. `skel add`, `skel ls` and the rest reach one daemon per
 repository over a local socket, which starts if none runs. Agents get their own commands,
