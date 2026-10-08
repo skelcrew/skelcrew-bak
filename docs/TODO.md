@@ -74,7 +74,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
       and sent as text.
 - [x] **Start on demand.** Any `skel` command starts the daemon if none runs, and waits until
       it listens.
-- [ ] **Walkthrough test.** One task driven from `skel add` to delivered through the real
+- [x] **Walkthrough test.** One task driven from `skel add` to delivered through the real
       socket, with a test standing in for each agent by its token. This is the milestone's
       "done when".
 - [ ] **Simulator: your inputs at random.** Pauses, kills, questions and answers, and tool
