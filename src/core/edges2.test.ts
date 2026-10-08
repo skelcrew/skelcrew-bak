@@ -5,16 +5,12 @@ import { evolve } from "./evolve";
 import {
   add,
   addPlanned,
-  approve,
   builder,
   buildRunning,
-  changes,
-  config,
   deny,
   done,
   id,
   kill,
-  mainMerged,
   pass,
   pause,
   peek,
@@ -28,11 +24,10 @@ import {
   start,
   stopped,
   tester,
-  types,
   workspace,
   workspaceCreated,
 } from "./testing";
-import type { Input, TaskEvent } from "./types";
+import type { TaskEvent } from "./types";
 
 describe("a paused tester", () => {
   test("keeps its copy, and a resumed review starts the tester in it", () => {
@@ -84,8 +79,6 @@ describe("your sign-off on a held task", () => {
 
     expect(peek(awaiting, set({ rigor: "light" })).ok).toBe(true);
   });
-
-  void approve;
 });
 
 describe("a stop's reply", () => {
@@ -145,5 +138,3 @@ describe("a damaged log", () => {
     expect(evolve(task, misplaced).ok).toBe(false);
   });
 });
-
-void [changes, config, mainMerged, types, (x: Input) => x];

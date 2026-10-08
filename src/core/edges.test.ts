@@ -18,14 +18,12 @@ import {
   delivered,
   done,
   doneAnswer,
-  id,
   kill,
   mainFailed,
   mainMerged,
   pass,
   pause,
   peek,
-  planner,
   play,
   retry,
   reviewed,
@@ -186,5 +184,3 @@ describe("rule 5: a late reply changes nothing", () => {
     expect(peek(failed.task, mainMerged(6))).toEqual({ ok: true, events: [], commands: [] });
   });
 });
-
-void [planner, id];
