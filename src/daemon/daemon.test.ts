@@ -135,6 +135,29 @@ describe("the daemon's tick", () => {
   });
 });
 
+describe("the daemon's fake tools", () => {
+  test("make a workspace and start the planner, replying as the real tools would", async () => {
+    const served = await serve(folder(), { socketFolder: join(folder(), "sockets"), tickMs: 10 });
+    if (!served.ok) throw new Error(served.message);
+    running.push(served.daemon);
+
+    await send(served.daemon.socket, add("Fix the export"));
+    let state = "";
+    await untilAsync(async () => {
+      const listed = await send(served.daemon.socket, { type: "ls" });
+      state =
+        listed.ok && listed.result.kind === "tasks" ? (listed.result.tasks[0]?.state ?? "") : "";
+      return state === "running";
+    });
+
+    expect(state).toBe("running");
+  });
+});
+
+async function untilAsync(done: () => Promise<boolean>): Promise<void> {
+  for (let waited = 0; !(await done()) && waited < 1_000; waited += 5) await Bun.sleep(5);
+}
+
 // Waits until `done` holds, checking every few milliseconds, for a second at
 // most.
 async function until(done: () => boolean): Promise<void> {

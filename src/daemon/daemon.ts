@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { readConfig } from "../config/config";
 import { Loop, type Tools } from "../loop/loop";
+import { FakeTools } from "../sim/fakes";
 import { EventStore } from "../store/store";
 import { answerLine } from "./handle";
 import { takeLock } from "./lock";
@@ -21,6 +22,7 @@ export type ServeOptions = {
   // Replaces the folder in /tmp for a long repository path's socket, so
   // tests never touch a real user's folder.
   socketFolder?: string;
+  // The fake tools unless given. The real ones come in milestone 4.
   tools?: Tools;
   now?: () => number;
   // How often the daemon retries replies it couldn't save and starts what
@@ -30,8 +32,12 @@ export type ServeOptions = {
 
 export type Served = { ok: true; daemon: Daemon } | { ok: false; message: string };
 
-// Until the fake tools are in, commands wait in the outbox.
-const noTools: Tools = { carryOut: () => {} };
+// The fake tools, as the daemon's. Each reply comes back a moment later,
+// never from inside carryOut.
+function fakeTools(): Tools {
+  const fakes = new FakeTools();
+  return { carryOut: (command, reply) => setTimeout(() => reply(fakes.answer(command)), 0) };
+}
 
 export async function serve(repo: string, options: ServeOptions = {}): Promise<Served> {
   const found = daemonPaths(repo, options.socketFolder);
@@ -66,7 +72,7 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
   } catch (error) {
     return fail(`.skelcrew/skelcrew.db couldn't be opened: ${String(error)}`);
   }
-  const opened = Loop.open(read.settings.config, options.tools ?? noTools, store, {
+  const opened = Loop.open(read.settings.config, options.tools ?? fakeTools(), store, {
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   if (!opened.ok) {

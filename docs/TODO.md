@@ -60,7 +60,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
       refuses to start.
 - [x] **The tick.** Requests and tool replies are handled one at a time. Every few seconds
       the daemon calls `retryReplies` and `startWaiting`.
-- [ ] **Fake tools in the daemon.** Workspaces, sessions and merges faked behind the tools
+- [x] **Fake tools in the daemon.** Workspaces, sessions and merges faked behind the tools
       interface, shared with the simulator rather than copied. Milestone 4 replaces them
       with git and tmux.
 - [ ] **Who is calling.** Each session gets a secret token. A request carrying one is
