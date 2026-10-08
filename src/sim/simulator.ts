@@ -53,6 +53,9 @@ export class Simulator {
   private readonly behaviours = new Map<TaskId, Required<Behaviour>>();
   private readonly live = new Set<SessionId>();
   private readonly started = new Set<string>(); // "task:request" of each session started
+  // Each command's reply, so a command sent again after a restart gets the
+  // same answer, as a real tool must give.
+  private readonly answers = new Map<string, { taskId: TaskId; input: Input } | null>();
   private now = 1_000;
   private commits = 0;
 
@@ -183,6 +186,12 @@ export class Simulator {
     return task?.phase === "ended" ? task.outcome.kind : null;
   }
 
+  // The type of every event saved for the task, oldest first.
+  events(taskId: TaskId): string[] {
+    const loaded = this.store.loadTaskEvents(taskId);
+    return loaded.ok ? loaded.events.map((event) => event.type) : [];
+  }
+
   delivered(taskId: TaskId): Delivered | null {
     const task = this.loop.task(taskId);
     if (task?.phase !== "ended" || task.outcome.kind !== "done") return null;
@@ -203,7 +212,11 @@ export class Simulator {
   private carryOut(command: Command, reply: Reply): void {
     this.handed++;
     if (command.type === "stop_session") this.live.delete(command.session);
-    const answer = this.replyTo(command);
+    const key =
+      "request" in command ? `${command.type}:${command.taskId}:${command.request}` : null;
+    const answer =
+      key !== null && this.answers.has(key) ? this.answers.get(key) : this.replyTo(command);
+    if (key !== null) this.answers.set(key, answer ?? null);
     const taskId = "taskId" in command ? command.taskId : null;
     this.queue.push({ kind: "reply", taskId, input: answer?.input ?? null, reply });
     if (command.type === "start_session") this.startAgent(command);

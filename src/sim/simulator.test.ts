@@ -50,3 +50,17 @@ describe("the simulator", () => {
     for (const n of [1, 2, 3]) expect(sim.outcome(task(n))).toBe("done");
   });
 });
+
+describe("a command sent again after a restart", () => {
+  test("gets the same reply, as a real tool must give", () => {
+    const sim = new Simulator(config);
+    sim.add(task(1), { conflicts: 1 });
+    for (let step = 0; step < 200 && sim.outcome(task(1)) === null; step++) {
+      sim.run({ steps: 1 });
+      sim.restart();
+    }
+
+    expect(sim.outcome(task(1))).toBe("done");
+    expect(sim.events(task(1)).filter((type) => type === "main.conflict")).toHaveLength(1);
+  });
+});
