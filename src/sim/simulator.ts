@@ -14,10 +14,11 @@
 //
 // It is test machinery, not rules, so it lives outside the core.
 
-import { CommitSha, SessionId } from "../core/ids";
+import type { SessionId } from "../core/ids";
 import type { Command, Config, Delivered, Input, Intent, TaskEvent, TaskId } from "../core/types";
 import { Loop, type ReadableLog, type Reply, type Tools } from "../loop/loop";
 import { EventStore } from "../store/store";
+import { FakeTools, sessionOf } from "./fakes";
 
 // What goes wrong for one task. Anything left out goes well.
 export type Behaviour = {
@@ -65,11 +66,15 @@ export class Simulator {
   private readonly behaviours = new Map<TaskId, Required<Behaviour>>();
   private readonly live = new Set<SessionId>();
   private readonly started = new Set<string>(); // "task:request" of each session started
-  // Each command's reply, so a command sent again after a restart gets the
-  // same answer, as a real tool must give.
-  private readonly answers = new Map<string, { taskId: TaskId; input: Input } | null>();
+  // The fake tools. A task's merge conflicts as many times as its
+  // behaviour says.
+  private readonly fakes = new FakeTools((taskId) => {
+    const behaviour = this.behaviour(taskId);
+    if (behaviour.conflicts === 0) return false;
+    behaviour.conflicts--;
+    return true;
+  });
   private now = 1_000;
-  private commits = 0;
 
   constructor(
     private readonly config: Config,
@@ -241,135 +246,18 @@ export class Simulator {
   // start.
   private carryOut(command: Command, reply: Reply): void {
     this.handed++;
-    const key =
-      "request" in command ? `${command.type}:${command.taskId}:${command.request}` : null;
-    const answer =
-      key !== null && this.answers.has(key) ? this.answers.get(key) : this.replyTo(command);
-    if (key !== null) this.answers.set(key, answer ?? null);
+    const answer = this.fakes.answer(command);
     const taskId = "taskId" in command ? command.taskId : null;
     const stops = command.type === "stop_session" ? command.session : null;
     this.queue.push({
       kind: "reply",
       taskId,
-      input: answer?.input ?? null,
+      input: answer,
       reply,
       stops,
       retry: false,
     });
     if (command.type === "start_session") this.startAgent(command);
-  }
-
-  // What the real tool would send back for a command, or null for one with
-  // no reply.
-  private replyTo(command: Command): { taskId: TaskId; input: Input } | null {
-    switch (command.type) {
-      case "create_workspace":
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "workspace_created",
-            request: command.request,
-            workspace: { path: `/sim/${command.taskId}`, branch: `skel/${command.taskId}` },
-          },
-        };
-
-      case "create_copy":
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "copy_created",
-            request: command.request,
-            copy: {
-              path: `/sim/${command.taskId}-copy-${command.request}`,
-              commit: command.commit,
-            },
-          },
-        };
-
-      case "start_session":
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "session_started",
-            request: command.request,
-            session: sessionOf(command),
-          },
-        };
-
-      // A late session's cleanup stop has no reply.
-      case "stop_session":
-        if (command.request === null) return null;
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "stopped",
-            request: command.request,
-            session: command.session,
-            saved: command.save ? "saved" : "nothing_to_save",
-            message: "",
-          },
-        };
-
-      case "commit_spec":
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "spec_committed",
-            request: command.request,
-            path: `docs/plans/${command.taskId}.md`,
-          },
-        };
-
-      case "merge_main": {
-        const behaviour = this.behaviour(command.taskId);
-        if (behaviour.conflicts > 0) {
-          behaviour.conflicts--;
-          return {
-            taskId: command.taskId,
-            input: {
-              by: "plugin",
-              type: "main_conflict",
-              request: command.request,
-              files: ["src/x.ts"],
-            },
-          };
-        }
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "main_merged",
-            request: command.request,
-            reviewed: { head: this.commit(), changedFiles: ["src/x.ts"] },
-          },
-        };
-      }
-
-      case "deliver": {
-        const commit = command.reviewed.head;
-        return {
-          taskId: command.taskId,
-          input: {
-            by: "plugin",
-            type: "delivered",
-            request: command.request,
-            delivered:
-              command.intent === "answer"
-                ? { kind: "report", path: `docs/answers/${command.taskId}.md`, commit }
-                : { kind: "branch", commit, ref: `skel/${command.taskId}` },
-          },
-        };
-      }
-
-      case "remove_workspace":
-      case "type_into_session":
-        return null;
-    }
   }
 
   // Starts the agent for a session, unless it already started: a start sent
@@ -402,7 +290,7 @@ export class Simulator {
           spec: null,
         };
       case "builder": {
-        const branch = { head: this.commit(), changedFiles: ["src/x.ts"] };
+        const branch = { head: this.fakes.commit(), changedFiles: ["src/x.ts"] };
         if (behaviour.intent === "answer") {
           return {
             by: "agent",
@@ -430,19 +318,10 @@ export class Simulator {
     return behaviour;
   }
 
-  private commit(): CommitSha {
-    this.commits++;
-    return CommitSha.parse(this.commits.toString(16).padStart(40, "0"));
-  }
-
   private tick(): number {
     this.now += 1_000;
     return this.now;
   }
-}
-
-function sessionOf(command: Extract<Command, { type: "start_session" }>): SessionId {
-  return SessionId.parse(`s-${command.taskId}-${command.request}`);
 }
 
 // A small seeded random source, so a failing run can be replayed.
