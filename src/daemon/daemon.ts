@@ -8,8 +8,8 @@ import { readConfig } from "../config/config";
 import type { SessionId } from "../core/ids";
 import type { BranchFacts, Task } from "../core/types";
 import { Loop, type Tools } from "../loop/loop";
-import { FakeTools } from "../sim/fakes";
 import { EventStore } from "../store/store";
+import { fakeTools } from "./fake-tools";
 import { answerLine } from "./handle";
 import { takeLock } from "./lock";
 import { daemonPaths, ownSocketFolder } from "./paths";
@@ -40,36 +40,6 @@ export type ServeOptions = {
 };
 
 export type Served = { ok: true; daemon: Daemon } | { ok: false; message: string };
-
-// The fake tools, as the daemon's. Each reply comes back a moment later,
-// never from inside carryOut.
-//
-// A fake session has no environment to hold its token, so the fake runner
-// writes the task's latest token to .skelcrew/sessions/<task>. You stand in
-// for its agent with SKELCREW_SESSION=$(cat .skelcrew/sessions/1). This goes
-// with the fakes in milestone 4.
-function fakeTools(fakes: FakeTools, tokens: Tokens, sessions: string): Tools {
-  return {
-    carryOut: (command, reply) => {
-      const answer = fakes.answer(command);
-      if (answer?.type === "session_started" && command.type === "start_session") {
-        mkdirSync(sessions, { recursive: true });
-        writeFileSync(join(sessions, `${command.taskId}`), `${tokens.tokenFor(answer.session)}\n`);
-      }
-      setTimeout(() => {
-        try {
-          reply(answer);
-        } catch (error) {
-          // A reply that doesn't fit its command. Its command stays in the
-          // outbox, and goes out again at the next start.
-          console.error(
-            `A tool's reply failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }, 0);
-    },
-  };
-}
 
 export async function serve(repo: string, options: ServeOptions = {}): Promise<Served> {
   const found = daemonPaths(repo, options.socketFolder);
@@ -112,9 +82,9 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
 
     const store = EventStore.open(paths.store);
     undo.push(() => store.close());
-    const fakes = new FakeTools();
     const tokens = new Tokens(loadSecret(join(paths.folder, "secret")));
-    const tools = options.tools ?? fakeTools(fakes, tokens, join(paths.folder, "sessions"));
+    const fakes = fakeTools(tokens, join(paths.folder, "sessions"));
+    const tools = options.tools ?? fakes.tools;
     const opened = Loop.open(config, tools, store, {
       ...(options.now === undefined ? {} : { now: options.now }),
     });
@@ -127,7 +97,7 @@ export async function serve(repo: string, options: ServeOptions = {}): Promise<S
     const context = {
       loop,
       tokens,
-      branchOf: options.branchOf ?? ((task) => fakes.branch(`${task.id}:${task.requests}`)),
+      branchOf: options.branchOf ?? fakes.branchOf,
     };
     const listening = await listen(paths.socket, (line) => answerLine(context, line));
     undo.push(() => rmSync(paths.socket, { force: true }));
