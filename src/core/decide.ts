@@ -3,10 +3,25 @@
 // or rejects it with a reason. It reads nothing else and changes nothing.
 //
 // `decide` below is the outline: each step is one line, in the order the
-// rules apply. The steps follow it, then one function per phase, then the
-// helpers that make workspaces and start and stop agents.
+// rules apply. The steps follow it: the rules for any phase, in four groups,
+// then one function per phase, then changing the plan, approval and
+// delivery. effects.ts builds the events and commands that start and stop
+// agents and make workspaces.
 
 import picomatch from "picomatch";
+import {
+  createWorkspace,
+  deliver,
+  type Effects,
+  mergeMain,
+  startBuilder,
+  startCopy,
+  startPlanner,
+  startTester,
+  stopAgent,
+  stopRunning,
+  stopTester,
+} from "./effects";
 import { runningSession, type TaskIn, waitingForSession } from "./task";
 import type {
   Command,
@@ -21,10 +36,8 @@ import type {
   Input,
   Plan,
   Reviewed,
-  SessionContext,
   SessionId,
   Task,
-  TesterCopy,
   Timestamp,
   Workspace,
 } from "./types";
@@ -150,38 +163,77 @@ function holds(task: Task, path: string): boolean {
   }
 }
 
-// Inputs whose rules don't depend on the phase.
-const anyPhaseInputs = [
-  "start",
-  "start_now",
-  "pause",
-  "resume",
-  "retry",
-  "kill",
-  "outside_change",
-  "set",
-  "attach",
-  "detach",
-  "decide_proposals",
-  "give_up",
-  "progress",
-  "usage",
+// Inputs whose rules don't depend on the phase, in four groups.
+const lifecycleInputs = ["start", "start_now", "pause", "resume", "retry", "kill"] as const;
+const yourCallsInputs = ["set", "attach", "detach", "decide_proposals", "outside_change"] as const;
+const conversationInputs = ["ask", "reply", "deliver_answer", "give_up", "progress"] as const;
+const repliesInputs = [
   "workspace_failed",
   "session_started",
   "session_failed",
   "session_ended",
   "stopped",
-  "ask",
-  "reply",
-  "deliver_answer",
+  "usage",
 ] as const;
-type AnyPhaseInput = Extract<Input, { type: (typeof anyPhaseInputs)[number] }>;
+
+type AnyPhaseInput = Extract<
+  Input,
+  {
+    type:
+      | (typeof lifecycleInputs)[number]
+      | (typeof yourCallsInputs)[number]
+      | (typeof conversationInputs)[number]
+      | (typeof repliesInputs)[number];
+  }
+>;
 
 function worksInAnyPhase(input: Input): input is AnyPhaseInput {
-  return anyPhaseInputs.some((type) => type === input.type);
+  const all: readonly string[] = [
+    ...lifecycleInputs,
+    ...yourCallsInputs,
+    ...conversationInputs,
+    ...repliesInputs,
+  ];
+  return all.includes(input.type);
 }
 
 function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
+  switch (input.type) {
+    case "start":
+    case "start_now":
+    case "pause":
+    case "resume":
+    case "retry":
+    case "kill":
+      return lifecycle(task, input, ctx);
+    case "set":
+    case "attach":
+    case "detach":
+    case "decide_proposals":
+    case "outside_change":
+      return yourCalls(task, input, ctx);
+    case "ask":
+    case "reply":
+    case "deliver_answer":
+    case "give_up":
+    case "progress":
+      return conversation(task, input, ctx);
+    case "workspace_failed":
+    case "session_started":
+    case "session_failed":
+    case "session_ended":
+    case "stopped":
+    case "usage":
+      return replies(task, input, ctx);
+  }
+}
+
+// Starting, holding and ending a task, from you or the scheduler.
+function lifecycle(
+  task: Task,
+  input: Extract<Input, { type: (typeof lifecycleInputs)[number] }>,
+  ctx: Context,
+): Decision {
   switch (input.type) {
     // The scheduler picked the task for a free slot, or you started it now.
     // Either way it carries on from where it waits.
@@ -259,7 +311,17 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
       }
       return ctx.accept(events, commands);
     }
+  }
+}
 
+// Your other calls: overruling the planner, stepping into a session, and
+// deciding on proposals. And the tracker, which can't move a task.
+function yourCalls(
+  task: Task,
+  input: Extract<Input, { type: (typeof yourCallsInputs)[number] }>,
+  ctx: Context,
+): Decision {
+  switch (input.type) {
     // Overrules the planner's call. See setPlan.
     case "set":
       if (task.phase === "ended") return ctx.reject(`#${task.id} has ended.`);
@@ -315,6 +377,54 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
       return ctx.reject(
         `Tasks move only through Skelcrew. The ${input.what} in the tracker was ignored.`,
       );
+  }
+}
+
+// An agent asking, your reply, and the agent's other reports.
+function conversation(
+  task: Task,
+  input: Extract<Input, { type: (typeof conversationInputs)[number] }>,
+  ctx: Context,
+): Decision {
+  switch (input.type) {
+    // One open question per task, so you are never flooded by one task.
+    // Options make an answer one tap.
+    case "ask": {
+      if (task.question !== null) return ctx.reject(`#${task.id} already has an open question.`);
+      if (input.options.length < 2 || input.options.length > 4) {
+        return ctx.reject("A question needs two to four options.");
+      }
+      const question = {
+        session: input.session,
+        text: input.text,
+        options: input.options,
+        askedAt: ctx.at,
+      };
+      return ctx.accept([{ type: "question.asked", question }]);
+    }
+
+    // The agent works again as soon as it reads your answer, so the answer
+    // waits on the task until the scheduler finds it a slot.
+    case "reply":
+      if (task.question === null) return ctx.reject(`#${task.id} has no open question.`);
+      if (task.keptAnswer !== null) {
+        return ctx.reject(`#${task.id} is already answered. Your answer waits for a slot.`);
+      }
+      if (isBlank(input.text)) return ctx.reject("A reply needs text.");
+      return ctx.accept([{ type: "answer.kept", text: input.text }]);
+
+    // The scheduler found a slot: the kept answer is typed into the session
+    // of the agent that asked.
+    case "deliver_answer": {
+      if (task.keptAnswer === null) return ctx.reject(`#${task.id} has no answer waiting.`);
+      const session = runningSession(task);
+      if (session === null) return ctx.reject(`#${task.id} has no agent running.`);
+      const { text } = task.keptAnswer;
+      return ctx.accept(
+        [{ type: "question.answered", text }],
+        [{ type: "type_into_session", session, text }],
+      );
+    }
 
     // The agent can't go on. It is stopped, and the task waits for you.
     case "give_up": {
@@ -328,22 +438,16 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
     // For the log and the screen. Nothing else changes.
     case "progress":
       return ctx.accept([{ type: "agent.progress", session: input.session, text: input.text }]);
+  }
+}
 
-    // Running totals per session, shown and never enforced. Totals only grow,
-    // so a lower report is an older one.
-    case "usage": {
-      const last = task.usage[input.session];
-      if (
-        last !== undefined &&
-        (input.usage.tokens < last.tokens ||
-          input.usage.cacheReads < last.cacheReads ||
-          input.usage.workingMs < last.workingMs)
-      ) {
-        return ctx.reject(`This usage report for ${input.session} is older than the last one.`);
-      }
-      return ctx.accept([{ type: "usage.recorded", session: input.session, usage: input.usage }]);
-    }
-
+// Replies about workspaces and sessions, and usage readings.
+function replies(
+  task: Task,
+  input: Extract<Input, { type: (typeof repliesInputs)[number] }>,
+  ctx: Context,
+): Decision {
+  switch (input.type) {
     // A workspace, or the tester's copy, couldn't be made. The task waits
     // for your retry.
     case "workspace_failed":
@@ -404,43 +508,19 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
       return ctx.accept([confirmed, ...after.events], after.commands);
     }
 
-    // One open question per task, so you are never flooded by one task.
-    // Options make an answer one tap.
-    case "ask": {
-      if (task.question !== null) return ctx.reject(`#${task.id} already has an open question.`);
-      if (input.options.length < 2 || input.options.length > 4) {
-        return ctx.reject("A question needs two to four options.");
+    // Running totals per session, shown and never enforced. Totals only grow,
+    // so a lower report is an older one.
+    case "usage": {
+      const last = task.usage[input.session];
+      if (
+        last !== undefined &&
+        (input.usage.tokens < last.tokens ||
+          input.usage.cacheReads < last.cacheReads ||
+          input.usage.workingMs < last.workingMs)
+      ) {
+        return ctx.reject(`This usage report for ${input.session} is older than the last one.`);
       }
-      const question = {
-        session: input.session,
-        text: input.text,
-        options: input.options,
-        askedAt: ctx.at,
-      };
-      return ctx.accept([{ type: "question.asked", question }]);
-    }
-
-    // The agent works again as soon as it reads your answer, so the answer
-    // waits on the task until the scheduler finds it a slot.
-    case "reply":
-      if (task.question === null) return ctx.reject(`#${task.id} has no open question.`);
-      if (task.keptAnswer !== null) {
-        return ctx.reject(`#${task.id} is already answered. Your answer waits for a slot.`);
-      }
-      if (isBlank(input.text)) return ctx.reject("A reply needs text.");
-      return ctx.accept([{ type: "answer.kept", text: input.text }]);
-
-    // The scheduler found a slot: the kept answer is typed into the session
-    // of the agent that asked.
-    case "deliver_answer": {
-      if (task.keptAnswer === null) return ctx.reject(`#${task.id} has no answer waiting.`);
-      const session = runningSession(task);
-      if (session === null) return ctx.reject(`#${task.id} has no agent running.`);
-      const { text } = task.keptAnswer;
-      return ctx.accept(
-        [{ type: "question.answered", text }],
-        [{ type: "type_into_session", session, text }],
-      );
+      return ctx.accept([{ type: "usage.recorded", session: input.session, usage: input.usage }]);
     }
   }
 }
@@ -448,7 +528,11 @@ function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
 // What happens once an agent's stop is confirmed. The next agent on a task
 // only starts now, so two never work on it at once. A task killed while an
 // agent was stopping removes its workspace now, once its work is safe.
-function afterStop(task: Task, removed: string | null, saved: string): Effects {
+function afterStop(
+  task: Task,
+  removed: string | null,
+  saved: "saved" | "nothing_to_save" | "save_failed",
+): Effects {
   const none: Effects = { events: [], commands: [] };
   if (task.phase === "ended") {
     const { kept } = task;
@@ -629,7 +713,7 @@ function inTriage(task: TaskIn<"triage">, input: Input, ctx: Context): Decision 
     }
 
     default:
-      return ctx.reject(`#${task.id} is in triage, so it can't take ${input.type}.`);
+      return wrongPhase(task, input, ctx);
   }
 }
 
@@ -914,31 +998,6 @@ function finishing(
   return deliver(task, plan, reviewed, handover, evidence, request);
 }
 
-// Hands over exactly the reviewed commit, or the report for an `answer`.
-function deliver(
-  task: Task,
-  plan: Plan,
-  reviewed: Reviewed,
-  handover: Handover,
-  evidence: string | null,
-  request: number,
-): Effects {
-  return {
-    events: [{ type: "output.requested", request }],
-    commands: [
-      {
-        type: "deliver",
-        taskId: task.id,
-        request,
-        intent: plan.intent,
-        reviewed,
-        handover,
-        evidence,
-      },
-    ],
-  };
-}
-
 // Your sign-off, and delivery's replies, in either phase that can finish.
 // Null for any other input.
 function finish(
@@ -994,147 +1053,6 @@ function finish(
     default:
       return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Workspaces and agents
-// ---------------------------------------------------------------------------
-
-type Effects = { events: EventBody[]; commands: Command[] };
-
-// Makes the task's workspace: a worktree on a new branch from main.
-function createWorkspace(task: Task, request: number): Effects {
-  return {
-    events: [{ type: "workspace.requested", request, tester: false }],
-    commands: [{ type: "create_workspace", taskId: task.id, request }],
-  };
-}
-
-// Brings the branch up to date with main, in the builder's workspace.
-function mergeMain(task: Task, workspace: Workspace, request: number): Effects {
-  return {
-    events: [{ type: "main.requested", request }],
-    commands: [{ type: "merge_main", taskId: task.id, request, workspace }],
-  };
-}
-
-// Starts the planner in the task's workspace, read only.
-function startPlanner(task: Task, workspace: Workspace, request: number): Effects {
-  return {
-    events: [{ type: "session.requested", request, role: "planner" }],
-    commands: [
-      {
-        type: "start_session",
-        taskId: task.id,
-        request,
-        role: "planner",
-        cwd: workspace.path,
-        edits: false,
-        context: sessionContext(task, null, null),
-      },
-    ],
-  };
-}
-
-// Makes the tester's own copy of the reviewed commit, which starts review.
-function startCopy(task: Task, reviewed: Reviewed, request: number): Effects {
-  return {
-    events: [{ type: "workspace.requested", request, tester: true }],
-    commands: [{ type: "create_copy", taskId: task.id, request, commit: reviewed.head }],
-  };
-}
-
-// Starts the tester in its own copy of the reviewed commit, read only, told
-// what the builder handed over.
-function startTester(task: TaskIn<"review">, copy: TesterCopy, request: number): Effects {
-  return {
-    events: [{ type: "session.requested", request, role: "tester" }],
-    commands: [
-      {
-        type: "start_session",
-        taskId: task.id,
-        request,
-        role: "tester",
-        cwd: copy.path,
-        edits: false,
-        context: { ...sessionContext(task, task.plan, null), handover: task.handover },
-      },
-    ],
-  };
-}
-
-// Starts a builder in the task's workspace, told why it is there. It may
-// edit, except on an `answer` task, which never changes code.
-function startBuilder(
-  task: Task,
-  workspace: Workspace,
-  plan: Plan,
-  feedback: Feedback | null,
-  request: number,
-): Effects {
-  return {
-    events: [{ type: "session.requested", request, role: "builder" }],
-    commands: [
-      {
-        type: "start_session",
-        taskId: task.id,
-        request,
-        role: "builder",
-        cwd: workspace.path,
-        edits: plan.intent !== "answer",
-        context: sessionContext(task, plan, feedback),
-      },
-    ],
-  };
-}
-
-// Stops whichever agent is working, if any. A builder that can edit has its
-// work saved. A tester's copy is removed with it. `remove` is the workspace
-// to remove too, for a planner or builder.
-function stopRunning(
-  task: Task,
-  request: number,
-  remove: { path: string; deleteBranch: boolean } | null,
-): Effects {
-  const session = runningSession(task);
-  if (session === null) return { events: [], commands: [] };
-  if (task.phase === "review") return stopTester(task, session, request);
-  const save = task.phase === "build" && task.plan.intent !== "answer";
-  return stopAgent(task, session, request, save, remove);
-}
-
-// Stops the tester and removes its copy. It never edits, so nothing is saved.
-function stopTester(task: TaskIn<"review">, session: SessionId, request: number): Effects {
-  const remove = task.copy === null ? null : { path: task.copy.path, deleteBranch: false };
-  return stopAgent(task, session, request, false, remove);
-}
-
-// Stops an agent the task lets go. With `save`, its uncommitted work is
-// committed after it stops. `remove` is a workspace to remove after that,
-// unless the save failed. The task keeps its slot until the stop is confirmed.
-function stopAgent(
-  task: Task,
-  session: SessionId,
-  request: number,
-  save: boolean,
-  remove: { path: string; deleteBranch: boolean } | null,
-): Effects {
-  return {
-    events: [{ type: "session.stopping", session, request, removes: remove?.path ?? null }],
-    commands: [{ type: "stop_session", taskId: task.id, request, session, save, remove }],
-  };
-}
-
-// What a new session is told, on top of its role's preamble.
-function sessionContext(task: Task, plan: Plan | null, feedback: Feedback | null): SessionContext {
-  return {
-    title: task.title,
-    description: task.description,
-    plan,
-    feedback,
-    handover: null,
-    answer: null,
-  };
 }
 
 // A report from an agent that isn't the task's current one: the reason, or
