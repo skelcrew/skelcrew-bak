@@ -290,7 +290,7 @@ export class Simulator {
           spec: null,
         };
       case "builder": {
-        const branch = { head: this.fakes.commit(), changedFiles: ["src/x.ts"] };
+        const branch = this.fakes.branch();
         if (behaviour.intent === "answer") {
           return {
             by: "agent",
