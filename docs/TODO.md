@@ -55,7 +55,7 @@ A draft, for review before any of it is built. In order, each one usable by the 
       paths and limits. A bad file is refused with what is wrong and where.
 - [x] **Protocol.** The messages between `skel` and the daemon, versioned and checked with
       Zod on both sides: a request, and an answer of accepted or rejected with the reason.
-- [ ] **One daemon per repository.** `skel serve` takes an `flock`, opens the store, reopens
+- [x] **One daemon per repository.** `skel serve` takes an `flock`, opens the store, reopens
       the loop and listens on a local socket. A second daemon for the same repository
       refuses to start.
 - [ ] **The tick.** Requests and tool replies are handled one at a time. Every few seconds

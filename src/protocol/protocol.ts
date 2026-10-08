@@ -137,6 +137,7 @@ const answer = z.union([
 export type Request = z.infer<typeof request>;
 export type Call = Request["call"];
 export type Row = z.infer<typeof row>;
+export type Result = z.infer<typeof result>;
 export type Answer = z.infer<typeof answer>;
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; message: string };
