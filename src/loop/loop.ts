@@ -228,7 +228,8 @@ export class Loop {
   }
 
   // decide never produces an event evolve refuses. If it ever does, that is a
-  // bug in the core, and carrying on would build a wrong task.
+  // bug in the core, and carrying on would build a wrong task. The event is
+  // already saved, so a restart refuses the same log and won't open either.
   private apply(event: TaskEvent): void {
     const evolved = evolve(this.task(event.taskId), event);
     if (!evolved.ok) throw new Error(`evolve refused decide's event: ${evolved.reason}`);
