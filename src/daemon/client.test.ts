@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { MAX_LINE } from "../protocol/protocol";
 import { send, sendStarting } from "./client";
 import { type Daemon, serve } from "./daemon";
+import { ALREADY_RUNNING } from "./lock";
 import { daemonPaths } from "./paths";
 import { cleanUp, folder } from "./testing";
 
@@ -26,6 +27,7 @@ function repository() {
     starts++;
     const served = await serve(repo, { socketFolder });
     if (served.ok) running.push(served.daemon);
+    return () => null;
   };
   return { socket: found.paths.socket, start, starts: () => starts };
 }
@@ -55,10 +57,40 @@ describe("sending to a daemon", () => {
     expect(repo.starts()).toBe(1);
   });
 
+  test("says at once why a started daemon stopped", async () => {
+    const repo = repository();
+    const began = Date.now();
+
+    const sent = await sendStarting(
+      repo.socket,
+      { type: "ls" },
+      null,
+      async () => () => "skelcrew.yaml: limits.max_running: expected a number, got string",
+    );
+    expect(sent).toEqual({
+      ok: false,
+      message:
+        "The daemon stopped while starting: skelcrew.yaml: limits.max_running: expected a number, got string",
+    });
+    expect(Date.now() - began).toBeLessThan(1_000);
+  });
+
+  // Two commands can each start one. The second stops on the lock, and both
+  // reach the first.
+  test("keeps waiting when the daemon it started found another running", async () => {
+    const repo = repository();
+
+    const sent = await sendStarting(repo.socket, { type: "ls" }, null, async () => {
+      await repo.start();
+      return () => `${ALREADY_RUNNING}, as process 1.`;
+    });
+    expect(sent.ok).toBe(true);
+  });
+
   test("gives up when a started daemon never answers, saying where to look", async () => {
     const repo = repository();
 
-    const sent = await sendStarting(repo.socket, { type: "ls" }, null, async () => {}, 200);
+    const sent = await sendStarting(repo.socket, { type: "ls" }, null, async () => () => null, 200);
     expect(sent).toEqual({
       ok: false,
       message:

@@ -3,7 +3,7 @@
 // current folder. Every other command goes to that daemon, starting it first
 // if none runs.
 
-import { mkdirSync, openSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sendStarting } from "../daemon/client";
 import { serve } from "../daemon/daemon";
@@ -44,7 +44,7 @@ if (args[0] === "serve") {
   }
   const code = await run(args, {
     env: process.env,
-    send: (call, token) => sendStarting(paths.socket, call, token, async () => start(paths.folder)),
+    send: (call, token) => sendStarting(paths.socket, call, token, () => start(paths.folder)),
     out: (line) => console.log(line),
     err: (line) => console.error(line),
   });
@@ -52,10 +52,12 @@ if (args[0] === "serve") {
 }
 
 // Starts `skel serve` in a process of its own, which carries on after this
-// command ends. What it prints goes to .skelcrew/daemon.log.
-function start(folder: string): void {
+// command ends. What it prints goes to .skelcrew/daemon.log. Returns a check
+// that says why it stopped, from the log's last line, or null while it runs.
+async function start(folder: string): Promise<() => string | null> {
   mkdirSync(folder, { recursive: true });
-  const log = openSync(join(folder, "daemon.log"), "a");
+  const logPath = join(folder, "daemon.log");
+  const log = openSync(logPath, "a");
   const daemon = Bun.spawn([process.execPath, import.meta.path, "serve"], {
     cwd: repo,
     stdin: "ignore",
@@ -63,4 +65,9 @@ function start(folder: string): void {
     stderr: log,
   });
   daemon.unref();
+  return () => {
+    if (daemon.exitCode === null) return null;
+    const lines = readFileSync(logPath, "utf8").trimEnd().split("\n");
+    return lines[lines.length - 1] ?? `it exited with code ${daemon.exitCode}`;
+  };
 }

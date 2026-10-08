@@ -10,6 +10,7 @@ import {
   type Result,
   VERSION,
 } from "../protocol/protocol";
+import { ALREADY_RUNNING } from "./lock";
 
 // `unreachable` says no daemon answers on the socket, so one can be started.
 export type Sent =
@@ -74,24 +75,32 @@ export function send(
   });
 }
 
-// Sends, starting the daemon first if none answers. `start` runs it in the
-// background. Two commands can each start one: the second daemon refuses on
-// the repository's lock, and both commands reach the first.
+// Runs the daemon in the background, and returns a check that says why it
+// stopped, or null while it runs.
+export type Start = () => Promise<() => string | null>;
+
+// Sends, starting the daemon first if none answers. Two commands can each
+// start one: the second daemon stops on the repository's lock, and both
+// commands reach the first, so that stop doesn't count as a failure.
 export async function sendStarting(
   socket: string,
   call: Call,
   token: string | null,
-  start: () => Promise<void>,
+  start: Start,
   timeoutMs = 10_000,
 ): Promise<Sent> {
   const first = await send(socket, call, token);
   if (first.ok || first.unreachable !== true) return first;
 
-  await start();
+  const stopped = await start();
   const giveUpAt = Date.now() + timeoutMs;
   for (;;) {
     const sent = await send(socket, call, token);
     if (sent.ok || sent.unreachable !== true) return sent;
+    const why = stopped();
+    if (why !== null && !why.startsWith(ALREADY_RUNNING)) {
+      return { ok: false, message: `The daemon stopped while starting: ${why}` };
+    }
     if (Date.now() >= giveUpAt) {
       const seconds = timeoutMs / 1000;
       const message = `The daemon didn't answer within ${seconds} seconds of starting it. See .skelcrew/daemon.log.`;
