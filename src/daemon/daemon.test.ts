@@ -52,6 +52,17 @@ describe("the daemon", () => {
     });
   });
 
+  test("lists a held task with why it is held", async () => {
+    const daemon = await started(folder());
+    await send(daemon.socket, add("Fix the export"));
+    await send(daemon.socket, { type: "send", task: TaskId.parse(1), input: { type: "pause" } });
+
+    const listed = await send(daemon.socket, { type: "ls" });
+    expect(listed.ok && listed.result.kind === "tasks" && listed.result.tasks[0]?.state).toBe(
+      "paused",
+    );
+  });
+
   test("gives each new task the next number", async () => {
     const daemon = await started(folder());
     await send(daemon.socket, add("One"));

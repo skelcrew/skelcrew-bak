@@ -2,7 +2,7 @@
 // or reads the tasks for `skel ls`, and says what came of it.
 
 import { TaskId } from "../core/ids";
-import type { AgentInput, Task, YourInput } from "../core/types";
+import type { AgentInput, Hold, Task, YourInput } from "../core/types";
 import type { Loop } from "../loop/loop";
 import {
   type Answer,
@@ -138,10 +138,26 @@ function rows(loop: Loop): Row[] {
     });
 }
 
+// Why a task is held, in a few words.
+function held(hold: Hold): string {
+  switch (hold.kind) {
+    case "paused":
+      return "paused";
+    case "crashed":
+      return "held: its agent crashed";
+    case "gave_up":
+      return "held: its agent gave up";
+    case "loop_cap":
+      return "held: too many review rounds";
+    case "failed":
+      return `held: ${hold.step.replaceAll("_", " ")} failed`;
+  }
+}
+
 // The task's step in plain words, for `skel ls`.
 function state(task: Task): string {
   if (task.phase === "ended") return task.outcome.kind;
-  if (task.hold !== null) return "held";
+  if (task.hold !== null) return held(task.hold);
   if (task.question !== null) return "waiting for your answer";
   return task.step.kind.replaceAll("_", " ");
 }
