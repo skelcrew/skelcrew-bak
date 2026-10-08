@@ -10,6 +10,11 @@ split into tasks here.
 - [ ] Decide on `AGENTS.md`'s rule that an agent working alone doesn't change the core.
 - [ ] Reconcile the spec's "the reducer is a few hundred lines" with `decide.ts` at about
       1,200, by changing the promise or splitting the code.
+- [ ] Decide on `output.failed` and `task.failed`. Both are event types, but nothing in the
+      core produces them, so no saved log can hold one yet. Either the core starts producing
+      them, or they go.
+- [ ] Before dogfooding freezes the saved-events fixture, add the event types it lacks:
+      `main.failed`, `session.ended` and `spec.requested`. Found by Fable.
 
 ## Milestone 2: store and loop
 
