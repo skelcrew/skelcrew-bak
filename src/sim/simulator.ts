@@ -30,7 +30,15 @@ export type Behaviour = {
 // to the loop's reply function, or an agent's next report, sent as an input.
 type Job =
   // A command with no task, such as removing a workspace, has a null task.
-  | { kind: "reply"; taskId: TaskId | null; input: Input | null; reply: Reply }
+  // A stop's reply ends its agent's life when it is handled, not before, so
+  // a stop in flight still counts against max_running.
+  | {
+      kind: "reply";
+      taskId: TaskId | null;
+      input: Input | null;
+      reply: Reply;
+      stops: SessionId | null;
+    }
   | { kind: "agent"; taskId: TaskId; input: Input };
 
 export type Options = {
@@ -134,9 +142,15 @@ export class Simulator {
     const before = job.taskId === null ? null : this.loop.task(job.taskId);
     const handed = this.handed;
     this.saveFailed = false;
+    // A stopped agent is gone once its stop's reply is handled, which may
+    // start the task's next agent in the same decision. So it leaves first,
+    // and comes back if the save fails.
+    const stops = job.kind === "reply" ? job.stops : null;
+    if (stops !== null) this.live.delete(stops);
     if (job.kind === "reply") job.reply(job.input);
     else this.loop.send(job.taskId, job.input, this.tick());
     if (!this.saveFailed) return true;
+    if (stops !== null) this.live.add(stops);
     const after = job.taskId === null ? null : this.loop.task(job.taskId);
     if (!Bun.deepEquals(after, before) || this.handed !== handed) {
       throw new Error(`A failed save changed #${job.taskId}, or sent a command.`);
@@ -211,14 +225,14 @@ export class Simulator {
   // start.
   private carryOut(command: Command, reply: Reply): void {
     this.handed++;
-    if (command.type === "stop_session") this.live.delete(command.session);
     const key =
       "request" in command ? `${command.type}:${command.taskId}:${command.request}` : null;
     const answer =
       key !== null && this.answers.has(key) ? this.answers.get(key) : this.replyTo(command);
     if (key !== null) this.answers.set(key, answer ?? null);
     const taskId = "taskId" in command ? command.taskId : null;
-    this.queue.push({ kind: "reply", taskId, input: answer?.input ?? null, reply });
+    const stops = command.type === "stop_session" ? command.session : null;
+    this.queue.push({ kind: "reply", taskId, input: answer?.input ?? null, reply, stops });
     if (command.type === "start_session") this.startAgent(command);
   }
 
