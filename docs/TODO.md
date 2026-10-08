@@ -16,6 +16,37 @@ split into tasks here.
 - [ ] Before dogfooding freezes the saved-events fixture, add the event types it lacks:
       `main.failed`, `session.ended` and `spec.requested`. Found by Fable.
 
+## Core bugs from the full review, for a live session
+
+Found by Codex and Fable before milestone 3. They change what the core decides, so they wait
+for you. The first three are proven by a script that walks the core through them.
+
+- [ ] **Approval lost after a failed spec commit.** Set approval while the task is held after
+      the spec commit failed: it is accepted but never applied, so the task ships without
+      your sign-off (rule 8). Intent and rigor set then are lost the same way.
+- [ ] **Kill while a session starts.** The late session is stopped with no request, so its
+      stop is never confirmed and the worktree is never removed. A retried task can also
+      start a builder before the late one has stopped (rule 10).
+- [ ] **Kill during a merge or spec commit** removes the workspace while git still works in
+      it, which can lose uncommitted work. One fix is for kill to wait, like pause, but
+      `docs/core.md` says kill always works. Your call.
+- [ ] **Kill after a builder crashed** removes its workspace without saving its edits
+      (rule 15). Found by Codex, not yet proven.
+- [ ] **An attached task still moves on** when its agent reports done or pass, though the
+      spec says the loop leaves it alone until you detach. Found by Codex.
+- [ ] **Rebuilding from the log accepts events that don't fit**, such as delivered right
+      after received, so a damaged log builds a wrong task instead of stopping. Found by
+      Codex.
+- [ ] **Triage accepts an empty brief, and a spec for light work** (spec, Triage rules).
+      Found by Codex.
+- [ ] **A retried builder isn't told why it was held.** The reason is gone once the hold
+      clears. Found by Codex.
+- [ ] **`detach hand_over` skips the checks `done` makes**, such as an empty branch. Found
+      by Fable.
+- [ ] **The loop doesn't check a reply against its command.** A null or wrong-request reply
+      retires the command and leaves the task waiting forever. Not the core, so it is
+      fixed in milestone 3.
+
 ## Milestone 3: daemon and CLI
 
 A draft, for review before any of it is built. In order, each one usable by the next.
