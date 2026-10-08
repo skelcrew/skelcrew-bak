@@ -73,8 +73,37 @@ export const decide: Decide = (task, envelope, config) => {
   const mismatch = senderMismatch(task, input);
   if (mismatch !== null) return ctx.reject(mismatch);
 
-  if (worksInAnyPhase(input)) return inAnyPhase(task, input, ctx);
+  // The rules for any phase, in four groups.
+  switch (input.type) {
+    case "start":
+    case "start_now":
+    case "pause":
+    case "resume":
+    case "retry":
+    case "kill":
+      return lifecycle(task, input, ctx);
+    case "set":
+    case "attach":
+    case "detach":
+    case "decide_proposals":
+    case "outside_change":
+      return yourCalls(task, input, ctx);
+    case "ask":
+    case "reply":
+    case "deliver_answer":
+    case "give_up":
+    case "progress":
+      return conversation(task, input, ctx);
+    case "workspace_failed":
+    case "session_started":
+    case "session_failed":
+    case "session_ended":
+    case "stopped":
+    case "usage":
+      return replies(task, input, ctx);
+  }
 
+  // Everything else depends on the phase.
   switch (task.phase) {
     case "triage":
       return inTriage(task, input, ctx);
@@ -192,75 +221,10 @@ function awaits(task: Task, input: Reply): boolean {
   }
 }
 
-// Inputs whose rules don't depend on the phase, in four groups.
-const lifecycleInputs = ["start", "start_now", "pause", "resume", "retry", "kill"] as const;
-const yourCallsInputs = ["set", "attach", "detach", "decide_proposals", "outside_change"] as const;
-const conversationInputs = ["ask", "reply", "deliver_answer", "give_up", "progress"] as const;
-const repliesInputs = [
-  "workspace_failed",
-  "session_started",
-  "session_failed",
-  "session_ended",
-  "stopped",
-  "usage",
-] as const;
-
-type AnyPhaseInput = Extract<
-  Input,
-  {
-    type:
-      | (typeof lifecycleInputs)[number]
-      | (typeof yourCallsInputs)[number]
-      | (typeof conversationInputs)[number]
-      | (typeof repliesInputs)[number];
-  }
->;
-
-function worksInAnyPhase(input: Input): input is AnyPhaseInput {
-  const all: readonly string[] = [
-    ...lifecycleInputs,
-    ...yourCallsInputs,
-    ...conversationInputs,
-    ...repliesInputs,
-  ];
-  return all.includes(input.type);
-}
-
-function inAnyPhase(task: Task, input: AnyPhaseInput, ctx: Context): Decision {
-  switch (input.type) {
-    case "start":
-    case "start_now":
-    case "pause":
-    case "resume":
-    case "retry":
-    case "kill":
-      return lifecycle(task, input, ctx);
-    case "set":
-    case "attach":
-    case "detach":
-    case "decide_proposals":
-    case "outside_change":
-      return yourCalls(task, input, ctx);
-    case "ask":
-    case "reply":
-    case "deliver_answer":
-    case "give_up":
-    case "progress":
-      return conversation(task, input, ctx);
-    case "workspace_failed":
-    case "session_started":
-    case "session_failed":
-    case "session_ended":
-    case "stopped":
-    case "usage":
-      return replies(task, input, ctx);
-  }
-}
-
 // Starting, holding and ending a task, from you or the scheduler.
 function lifecycle(
   task: Task,
-  input: Extract<Input, { type: (typeof lifecycleInputs)[number] }>,
+  input: Extract<Input, { type: "start" | "start_now" | "pause" | "resume" | "retry" | "kill" }>,
   ctx: Context,
 ): Decision {
   switch (input.type) {
@@ -351,7 +315,10 @@ function lifecycle(
 // deciding on proposals. And the tracker, which can't move a task.
 function yourCalls(
   task: Task,
-  input: Extract<Input, { type: (typeof yourCallsInputs)[number] }>,
+  input: Extract<
+    Input,
+    { type: "set" | "attach" | "detach" | "decide_proposals" | "outside_change" }
+  >,
   ctx: Context,
 ): Decision {
   switch (input.type) {
@@ -419,7 +386,7 @@ function yourCalls(
 // An agent asking, your reply, and the agent's other reports.
 function conversation(
   task: Task,
-  input: Extract<Input, { type: (typeof conversationInputs)[number] }>,
+  input: Extract<Input, { type: "ask" | "reply" | "deliver_answer" | "give_up" | "progress" }>,
   ctx: Context,
 ): Decision {
   switch (input.type) {
@@ -480,7 +447,18 @@ function conversation(
 // Replies about workspaces and sessions, and usage readings.
 function replies(
   task: Task,
-  input: Extract<Input, { type: (typeof repliesInputs)[number] }>,
+  input: Extract<
+    Input,
+    {
+      type:
+        | "workspace_failed"
+        | "session_started"
+        | "session_failed"
+        | "session_ended"
+        | "stopped"
+        | "usage";
+    }
+  >,
   ctx: Context,
 ): Decision {
   switch (input.type) {
