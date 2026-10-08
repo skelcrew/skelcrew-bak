@@ -461,7 +461,8 @@ export type Command =
   | {
       type: "stop_session";
       taskId: TaskId;
-      request: number;
+      // Null for the cleanup of a late session, whose stop nobody waits on.
+      request: number | null;
       session: SessionId;
       save: boolean;
       remove: { path: string; deleteBranch: boolean } | null;

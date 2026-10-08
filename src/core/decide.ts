@@ -43,6 +43,9 @@ export const decide: Decide = (task, envelope, config) => {
   if (input.type === "add" || input.type === "task_received") return create(task, input, ctx);
   if (task === null) return ctx.reject(`#${envelope.taskId} doesn't exist.`);
 
+  const cleanup = lateReply(task, input, ctx);
+  if (cleanup !== null) return cleanup;
+
   const mismatch = senderMismatch(task, input);
   if (mismatch !== null) return ctx.reject(mismatch);
 
@@ -99,6 +102,51 @@ function create(
       plan,
     },
   ]);
+}
+
+// A workspace or session the task isn't waiting for: its request isn't the
+// one the task's step records, such as one that arrives after the task was
+// killed. It is cleaned up, and nothing is recorded, so nothing is left
+// behind. A repeated reply for what the task already holds is ignored, since
+// cleaning it up would stop the working agent or remove its workspace. Null
+// when the task is waiting for the reply.
+function lateReply(task: Task, input: Input, ctx: Context): Decision | null {
+  if (input.type === "workspace_created" || input.type === "copy_created") {
+    if (waitingForWorkspace(task, input.request)) return null;
+    const path = input.type === "workspace_created" ? input.workspace.path : input.copy.path;
+    if (holds(task, path)) return ctx.accept([]);
+    return ctx.accept([], [{ type: "remove_workspace", path, deleteBranch: false }]);
+  }
+  if (input.type === "session_started") {
+    if (waitingForSession(task, input.request)) return null;
+    if (runningSession(task) === input.session) return ctx.accept([]);
+    return ctx.accept(
+      [],
+      [
+        {
+          type: "stop_session",
+          taskId: task.id,
+          request: null,
+          session: input.session,
+          save: false,
+          remove: null,
+        },
+      ],
+    );
+  }
+  return null;
+}
+
+// Whether the task holds this workspace or tester's copy.
+function holds(task: Task, path: string): boolean {
+  switch (task.phase) {
+    case "ended":
+      return task.kept?.path === path;
+    case "review":
+      return task.workspace.path === path || task.copy?.path === path;
+    default:
+      return task.workspace?.path === path;
+  }
 }
 
 // Inputs whose rules don't depend on the phase.
