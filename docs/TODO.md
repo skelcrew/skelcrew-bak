@@ -23,7 +23,7 @@ split into tasks here.
       starts and stops the tasks no longer record, for the scheduler.
 - [x] **Reopening.** Rebuild every task from the log, resend unfinished commands, and restore
       the count of starts in flight.
-- [ ] **Simulator.** The loop with fake tools and scripted agents, so whole lifecycles run in
+- [x] **Simulator.** The loop with fake tools and scripted agents, so whole lifecycles run in
       tests, including several tasks sharing `max_running`.
 - [ ] **Loop property test.** Random inputs through the real loop and store, with failed saves
       and restarts at random moments. Checks rules 10, 16, 17 and 22.
