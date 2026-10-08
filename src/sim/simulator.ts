@@ -31,13 +31,15 @@ export type Behaviour = {
 type Job =
   // A command with no task, such as removing a workspace, has a null task.
   // A stop's reply ends its agent's life when it is handled, not before, so
-  // a stop in flight still counts against max_running.
+  // a stop in flight still counts against max_running. Once the loop holds
+  // a reply whose save failed, `retry` asks the loop to save it again.
   | {
       kind: "reply";
       taskId: TaskId | null;
       input: Input | null;
       reply: Reply;
       stops: SessionId | null;
+      retry: boolean;
     }
   // Anything else sent as an input: an agent's report, or a start the
   // scheduler picked.
@@ -129,7 +131,12 @@ export class Simulator {
       }
       const job = this.next();
       if (job === undefined) continue;
-      if (!this.deliver(job)) this.queue.unshift(job); // sent again, as the daemon does
+      if (this.deliver(job)) continue;
+      if (job.kind === "input")
+        this.queue.unshift(job); // sent again, as the daemon does
+      // The loop kept the reply. Retried at once, so no other reply waits
+      // unsaved beside it, and each failed retry is checked on its own.
+      else while (!this.deliver({ ...job, retry: true })) {}
     }
   }
 
@@ -154,8 +161,9 @@ export class Simulator {
     // and comes back if the save fails.
     const stops = job.kind === "reply" ? job.stops : null;
     if (stops !== null) this.live.delete(stops);
-    if (job.kind === "reply") job.reply(job.input);
-    else this.loop.send(job.taskId, job.input);
+    if (job.kind === "input") this.loop.send(job.taskId, job.input);
+    else if (job.retry) this.loop.retryReplies();
+    else job.reply(job.input);
     if (!this.saveFailed) return true;
     if (stops !== null) this.live.add(stops);
     const after = job.taskId === null ? null : this.loop.task(job.taskId);
@@ -240,7 +248,14 @@ export class Simulator {
     if (key !== null) this.answers.set(key, answer ?? null);
     const taskId = "taskId" in command ? command.taskId : null;
     const stops = command.type === "stop_session" ? command.session : null;
-    this.queue.push({ kind: "reply", taskId, input: answer?.input ?? null, reply, stops });
+    this.queue.push({
+      kind: "reply",
+      taskId,
+      input: answer?.input ?? null,
+      reply,
+      stops,
+      retry: false,
+    });
     if (command.type === "start_session") this.startAgent(command);
   }
 

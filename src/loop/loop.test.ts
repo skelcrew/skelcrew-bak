@@ -111,12 +111,12 @@ describe("a tool's reply", () => {
     loop.send(id, add());
     loop.send(id, start);
 
-    expect(tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1))).toBe(true);
+    tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1));
     expect(loop.task(id)?.phase === "triage" && loop.task(id)?.requests).toBe(2);
     expect(outboxTypes(store)).toEqual(["start_session"]);
   });
 
-  test("whose save fails keeps its command in the outbox, and says so", () => {
+  test("whose save fails is kept by the loop, and saved when it retries", () => {
     const store = EventStore.open(":memory:");
     let failing = false;
     const log: Log = {
@@ -131,12 +131,15 @@ describe("a tool's reply", () => {
     const reply = tools.replies.get(`${id}:create_workspace`);
 
     failing = true;
-    expect(reply?.(workspaceCreated(1))).toBe(false);
+    reply?.(workspaceCreated(1));
+    loop.retryReplies();
     expect(outboxTypes(store)).toEqual(["create_workspace"]);
 
+    // The tool never replies again. The loop saves the reply it kept.
     failing = false;
-    expect(reply?.(workspaceCreated(1))).toBe(true);
+    loop.retryReplies();
     expect(outboxTypes(store)).toEqual(["start_session"]);
+    expect(loop.task(id)?.phase === "triage" && loop.task(id)?.requests).toBe(2);
   });
 
   test("that comes too late still lets its command go", () => {
@@ -147,7 +150,7 @@ describe("a tool's reply", () => {
     loop.send(id, start);
     loop.send(id, kill);
 
-    expect(tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1))).toBe(true);
+    tools.replies.get(`${id}:create_workspace`)?.(workspaceCreated(1));
     expect(outboxTypes(store)).toEqual(["remove_workspace"]);
   });
 });

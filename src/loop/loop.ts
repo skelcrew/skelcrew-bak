@@ -17,11 +17,11 @@ import type { Loaded, Queued, Saved, SavedCommand } from "../store/store";
 // Carries out the core's commands: making workspaces, starting and stopping
 // sessions, merging.
 //
-// Once a command's work is done, its tool calls `reply` with the reply, or
-// with null for a command that has none. The reply's events are saved in the
-// same transaction as the command leaving the outbox, so the two never come
-// apart. `reply` returns false when that save failed: the command stays in
-// the outbox, and the tool calls `reply` again later.
+// Once a command's work is done, its tool calls `reply` once, with the reply,
+// or with null for a command that has none. The reply's events are saved in
+// the same transaction as the command leaving the outbox, so the two never
+// come apart. If that save fails, the loop keeps the reply and tries again
+// on retryReplies, so a tool never has to.
 //
 // If the daemon dies before a command's reply is saved, it goes out again
 // after the restart. So a tool may get a command twice, and doing it twice
@@ -33,7 +33,7 @@ export interface Tools {
   carryOut(command: Command, reply: Reply): void;
 }
 
-export type Reply = (input: Input | null) => boolean;
+export type Reply = (input: Input | null) => void;
 
 // Where decisions are saved. The event store is the real one.
 export interface Log {
@@ -54,6 +54,8 @@ export class Loop {
   // Commands handed to the tools whose work hasn't finished, by their id in
   // the outbox.
   private readonly pending = new Map<number, Command>();
+  // Replies whose save failed, by their command's outbox id, to try again.
+  private readonly unsaved = new Map<number, Input | null>();
   // Set by dispatch while it hands commands to the tools. handle refuses any
   // input while it is set, which catches a tool replying from inside carryOut.
   private busy = false;
@@ -130,6 +132,18 @@ export class Loop {
     });
   }
 
+  // Tries again to save every reply whose save failed. The daemon calls it on
+  // its tick. A reply that fails again is kept for the next try, with no
+  // limit: v3 gave up after five, and a task then held its slot until a
+  // restart, even once the disk was fine.
+  retryReplies(): void {
+    for (const [id, input] of [...this.unsaved]) {
+      const command = this.pending.get(id);
+      this.unsaved.delete(id);
+      if (command !== undefined) this.receive(command, input, id);
+    }
+  }
+
   // One input for one task, at the time on the loop's clock.
   send(taskId: TaskId, input: Input): Decision {
     return this.handle(taskId, input, []).decision;
@@ -188,20 +202,23 @@ export class Loop {
       // If it can't leave the outbox, it isn't typed: a restart would type
       // it again. The message is lost instead, as the spec allows.
       if (!this.log.carriedOut(id).ok) return;
-      this.tools.carryOut(command, () => true);
+      this.tools.carryOut(command, () => {});
       return;
     }
     this.tools.carryOut(command, (input) => {
-      if (!this.pending.has(id)) return true; // answered already
-      const answered = this.answer(command, input, id);
-      if (answered) this.pending.delete(id);
-      return answered;
+      if (this.pending.has(id) && !this.unsaved.has(id)) this.receive(command, input, id);
     });
+  }
+
+  // Saves a reply, or keeps it to try again if the save fails.
+  private receive(command: Command, input: Input | null, id: number): void {
+    if (this.answer(command, input, id)) this.pending.delete(id);
+    else this.unsaved.set(id, input);
   }
 
   // A tool's reply to a command: saved with the command leaving the outbox,
   // or for a reply the core refuses, the command just leaves. False when a
-  // save failed, so the tool replies again later.
+  // save failed.
   private answer(command: Command, input: Input | null, id: number): boolean {
     if (input === null || !("taskId" in command)) return this.log.carriedOut(id).ok;
     const handled = this.handle(command.taskId, input, [id]);
