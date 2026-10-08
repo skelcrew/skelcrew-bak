@@ -7,11 +7,16 @@
 // proceeds, the builder hands over, the tester passes or asks for changes.
 // Each task's behaviour says what goes wrong for it.
 //
+// With a seed, replies from different tasks are interleaved at random, and
+// saves can fail at random too. Within one task, the order stays as it would
+// be. Every input whose save fails is checked to have changed nothing, and is
+// sent again, as the daemon does.
+//
 // It is test machinery, not rules, so it lives outside the core.
 
 import { CommitSha, SessionId } from "../core/ids";
-import type { Command, Config, Delivered, Input, Intent, TaskId } from "../core/types";
-import { Loop, type Tools } from "../loop/loop";
+import type { Command, Config, Delivered, Input, Intent, TaskEvent, TaskId } from "../core/types";
+import { Loop, type ReadableLog, type Tools } from "../loop/loop";
 import { EventStore } from "../store/store";
 
 // What goes wrong for one task. Anything left out goes well.
@@ -25,11 +30,21 @@ export type Behaviour = {
 // command once sent, or an agent's next report.
 type Job = { taskId: TaskId; input: Input; finished?: () => void; agent: boolean };
 
+export type Options = {
+  seed?: number; // interleaves tasks' replies at random
+  failSaves?: number; // the chance that a save fails, from 0 to 1
+};
+
 export class Simulator {
   // The most agents ever live at once, from their start to their stop.
   mostAgentsAtOnce = 0;
 
   private readonly store = EventStore.open(":memory:");
+  private readonly log: ReadableLog;
+  private readonly random: (() => number) | null;
+  private failSaves: number;
+  private saveFailed = false;
+  private handed = 0;
   private loop: Loop;
   private queue: Job[] = [];
   private readonly behaviours = new Map<TaskId, Required<Behaviour>>();
@@ -38,8 +53,29 @@ export class Simulator {
   private now = 1_000;
   private commits = 0;
 
-  constructor(private readonly config: Config) {
-    this.loop = new Loop(config, this.tools(), this.store);
+  constructor(
+    private readonly config: Config,
+    options: Options = {},
+  ) {
+    this.random = options.seed === undefined ? null : mulberry32(options.seed);
+    this.failSaves = options.failSaves ?? 0;
+    this.log = this.flaky();
+    this.loop = new Loop(config, this.tools(), this.log);
+  }
+
+  // No more failed saves, so a run can finish.
+  calm(): void {
+    this.failSaves = 0;
+  }
+
+  // Whether the loop's tasks match a fresh replay of the saved log.
+  tasksMatchTheLog(): boolean {
+    const loaded = this.store.loadTasks();
+    if (!loaded.ok) return false;
+    for (const [taskId, task] of loaded.tasks) {
+      if (!Bun.deepEquals(this.loop.task(taskId), task)) return false;
+    }
+    return true;
   }
 
   // Adds a task. With an intent, it skips triage. Without one, the planner
@@ -60,7 +96,7 @@ export class Simulator {
           ? null
           : { intent: behaviour.intent, rigor: "light", approve: false },
     };
-    this.loop.send(taskId, input, this.tick());
+    while (!this.send(taskId, input)) {}
   }
 
   // Runs until nothing is left to do, or for at most `steps` steps. When
@@ -70,21 +106,69 @@ export class Simulator {
       if (this.queue.length === 0 && this.loop.startWaiting(this.tick()).length === 0) {
         if (this.queue.length === 0) return;
       }
-      const job = this.queue.shift();
+      const job = this.next();
       if (job === undefined) continue;
-      this.loop.send(job.taskId, job.input, this.tick());
+      if (!this.send(job.taskId, job.input)) {
+        this.queue.unshift(job); // the daemon sends a lost reply again
+        continue;
+      }
       job.finished?.();
     }
+  }
+
+  // The next job: the oldest, or with a seed, the oldest of a task picked at
+  // random, so each task's own order is kept.
+  private next(): Job | undefined {
+    if (this.random === null) return this.queue.shift();
+    const firsts = [...new Set(this.queue.map((job) => job.taskId))];
+    const taskId = firsts[Math.floor(this.random() * firsts.length)];
+    const i = this.queue.findIndex((job) => job.taskId === taskId);
+    return i < 0 ? undefined : this.queue.splice(i, 1)[0];
+  }
+
+  // Sends one input. False if its save failed, after checking it changed
+  // nothing and sent nothing (rule 17).
+  private send(taskId: TaskId, input: Input): boolean {
+    const before = this.loop.task(taskId);
+    const handed = this.handed;
+    this.saveFailed = false;
+    this.loop.send(taskId, input, this.tick());
+    if (!this.saveFailed) return true;
+    if (!Bun.deepEquals(this.loop.task(taskId), before) || this.handed !== handed) {
+      throw new Error(`A failed save changed #${taskId}, or sent a command.`);
+    }
+    return false;
+  }
+
+  // The store, with saves that fail at random.
+  private flaky(): ReadableLog {
+    const store = this.store;
+    return {
+      append: (events: TaskEvent[], commands: Command[]) => {
+        if (this.random !== null && this.random() < this.failSaves) {
+          this.saveFailed = true;
+          return { ok: false, reason: "a simulated failure" };
+        }
+        return store.append(events, commands);
+      },
+      carriedOut: (id: number) => store.carriedOut(id),
+      loadTasks: () => store.loadTasks(),
+      loadCommands: () => store.loadCommands(),
+    };
   }
 
   // The daemon restarts. Work the tools hadn't finished is lost, and the
   // reopened loop sends it again from the outbox. Agents keep running, as
   // they do in tmux, so their next reports still arrive.
   restart(): void {
-    this.queue = this.queue.filter((job) => job.agent);
-    const opened = Loop.open(this.config, this.tools(), this.store);
+    const agents = this.queue.filter((job) => job.agent);
+    this.queue = [];
+    const opened = Loop.open(this.config, this.tools(), this.log);
     if (!opened.ok) throw new Error(opened.reason);
     this.loop = opened.loop;
+    // Replies sent again go first, so an agent's report still comes after
+    // its session's start.
+    this.queue.push(...agents);
   }
 
   // How the task ended, or null while it hasn't.
@@ -109,6 +193,7 @@ export class Simulator {
 
   // The reply goes first, so a new agent's report arrives after its start.
   private carryOut(command: Command, finished: () => void): void {
+    this.handed++;
     if (command.type === "stop_session") this.live.delete(command.session);
     const reply = this.replyTo(command);
     if (reply === null) finished();
@@ -300,4 +385,15 @@ export class Simulator {
 
 function sessionOf(command: Extract<Command, { type: "start_session" }>): SessionId {
   return SessionId.parse(`s-${command.taskId}-${command.request}`);
+}
+
+// A small seeded random source, so a failing run can be replayed.
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
