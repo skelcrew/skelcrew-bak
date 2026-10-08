@@ -256,3 +256,15 @@ describe("typing into a session", () => {
     expect(outboxWhileTyping).toEqual([0]);
   });
 });
+
+describe("a tool replying from inside carryOut", () => {
+  test("is caught, so one input is handled at a time", () => {
+    const tools: Tools = { carryOut: (_command, reply) => void reply(workspaceCreated(1)) };
+    const loop = new Loop(config, tools, EventStore.open(":memory:"));
+    loop.send(id, add(), 1_000);
+
+    expect(() => loop.send(id, start, 2_000)).toThrow(
+      "A tool replied from inside carryOut. Reply later instead.",
+    );
+  });
+});

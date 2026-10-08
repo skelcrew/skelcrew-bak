@@ -26,6 +26,9 @@ import type { Loaded, Queued, Saved, SavedCommand } from "../store/store";
 // If the daemon dies before a command's reply is saved, it goes out again
 // after the restart. So a tool may get a command twice, and doing it twice
 // must have the effect of doing it once.
+//
+// A tool never replies from inside `carryOut`, only later, so one input is
+// handled at a time.
 export interface Tools {
   carryOut(command: Command, reply: Reply): void;
 }
@@ -52,6 +55,9 @@ export class Loop {
   // own, since a command without a log has no id.
   private readonly pending = new Map<number, Command>();
   private nextKey = 1;
+  // Set while an input is handled, so a tool replying from inside carryOut
+  // is caught.
+  private busy = false;
   private readonly now: () => number;
 
   constructor(
@@ -124,6 +130,7 @@ export class Loop {
     at: number,
     done: number[],
   ): { decision: Decision; saved: boolean } {
+    if (this.busy) throw new Error("A tool replied from inside carryOut. Reply later instead.");
     const decision = decide(this.task(taskId), { taskId, at, input }, this.config);
     if (!decision.ok) return { decision, saved: true };
 
@@ -140,7 +147,12 @@ export class Loop {
 
   // Hands commands to the tools.
   private dispatch(commands: { command: Command; id: number | undefined }[]): void {
-    for (const { command, id } of commands) this.carryOut(command, id, this.track(command));
+    this.busy = true;
+    try {
+      for (const { command, id } of commands) this.carryOut(command, id, this.track(command));
+    } finally {
+      this.busy = false;
+    }
   }
 
   private track(command: Command): number {
